@@ -87,8 +87,15 @@ async def raw_to_extracted(input: BlobClientTrigger) -> None:
             paragraph
             for paragraph in doc_result.paragraphs or []
             if paragraph.role == ParagraphRole.TITLE
+        ),  # First, title
+        next(
+            (
+                paragraph
+                for paragraph in doc_result.paragraphs or []
+                if paragraph.role == ParagraphRole.SECTION_HEADING
+            ),  # Second, section heading
+            None,  # Third, nothing
         ),
-        None,
     )
     raw_text_model = RawTextModel(
         content=doc_result.content,
