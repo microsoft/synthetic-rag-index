@@ -22,12 +22,12 @@ graph LR
   enrich["Enrich"]
   extract["Extract"]
   filter["Filter"]
-  index["Index"]
-  raw["Raw"]
+  index[("Index")]
+  raw[("Raw")]
 
-  enrich --> filter
-  extract --> enrich
-  filter --> index
+  enrich --> index
+  extract --> filter
+  filter --> enrich
   raw --> extract
 ```
 
