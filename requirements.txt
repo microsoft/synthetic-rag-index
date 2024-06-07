@@ -3,7 +3,7 @@ azure-ai-documentintelligence==1.0.0b3
 azure-functions==1.19.0
 azure-identity==1.16.0  # Required for all Azure SDKs
 azure-identity==1.16.0  # Required for all Azure SDKs
-azure-monitor-opentelemetry==1.4.2
+azure-monitor-opentelemetry==1.6.0
 azure-search-documents==11.6.0b3
 azurefunctions-extensions-bindings-blob==1.0.0b1
 nltk==3.8.1
