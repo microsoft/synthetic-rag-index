@@ -1,6 +1,6 @@
 # 🧠 Synthetic RAG Index
 
-Service to import data from various sources (e.g. PDF, images, Microsoft Office, HTML) and index it in AI Search. Increases data relevance and reduces final size by 95%+. Useful for RAG scenarios with LLM. Hosted in Azure with serverless architecture.
+Service to import data from various sources (e.g. PDF, images, Microsoft Office, HTML) and index it in AI Search. Increases data relevance and reduces final size by 90%+. Useful for RAG scenarios with LLM. Hosted in Azure with serverless architecture.
 
 <!-- github.com badges -->
 [![Last release date](https://img.shields.io/github/release-date/clemlesne/call-center-ai)](https://github.com/clemlesne/call-center-ai/releases)
@@ -8,11 +8,15 @@ Service to import data from various sources (e.g. PDF, images, Microsoft Office,
 
 ## Overview
 
+In a real-world scenario, with a public corpus of 15M characters (222 PDF, 7.330 pages), 2.940 facts were generated (8.41 MB indexed). That's a 93% reduction in document amount compared to the chunck method (48.111 chuncks, 300 characters each).
+
 It includes principles taken from research papers:
 
 1. Repetition removal (https://arxiv.org/abs/2112.11446)
 2. Corpus cleaning (https://arxiv.org/abs/1910.10683)
 3. Synthetic data generation (https://huggingface.co/spaces/HuggingFaceFW/blogpost-fineweb-v1)
+
+Funcional workflow is as follows:
 
 ```mermaid
 ---
