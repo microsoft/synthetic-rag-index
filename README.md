@@ -190,6 +190,30 @@ graph LR
   search_index -. Generate embeddings .-> openai_ada
 ```
 
+### Usage cost
+
+From experiments, the cost of indexing a document is around 29.15€ per 1k pages. Here is a detailed breakdown:
+
+Scenario:
+
+- 7.330 pages (15M characters)
+- 222 PDF (550.50 MB)
+- French (90%) and English (10%)
+
+Outcome:
+
+- 2.940 facts generated
+- 8.41 MB indexed on AI Search
+
+Cost:
+
+| Service | Usage | Cost (abs) | Cost (per 1k pages) |
+|-|-|-|-|
+| **Azure Document Intelligence** | 7.330 pages | 67,79€ | 9.25€ |
+| **Azure OpenAI GPT-4o** (in) | 23.79M tokens | 111,81€ | 15.25€ |
+| **Azure OpenAI GPT-4o** (out) | 2.45M tokens | 34,06€ | 4.65€ |
+| **Total** | | **213,66€** | **29.15€** |
+
 ## Local installation
 
 ### Prerequisites
