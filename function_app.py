@@ -21,8 +21,8 @@ from helpers.http import azure_transport
 from openai import AsyncAzureOpenAI
 from openai.types.chat import ChatCompletionSystemMessageParam
 from os import getenv
-from pydantic import TypeAdapter, ValidationError
-from typing import Optional
+from pydantic import TypeAdapter, ValidationError, BaseModel
+from typing import Optional, Type, TypeVar
 import asyncio
 import azure.functions as func
 import hashlib
@@ -31,28 +31,39 @@ import math
 import nltk
 import tiktoken
 from helpers.models import (
-    IndexedFactModel,
-    LlmDocumentModel,
-    RawTextModel,
-    StoreDocumentModel,
+    ChunkedDocumentModel,
+    ExtractedDocumentModel,
+    FactedDocumentModel,
+    FactedLlmModel,
+    FactModel,
+    IndexedDocumentModel,
+    PagedDocumentModel,
+    SynthetisedDocumentModel,
 )
+import re
 
 
 # Azure Functions
 app = func.FunctionApp()
 
 # Storage Account
+CHUNCK_FOLDER = "2-chunck"
 CONTAINER_NAME = "trainings"
-EXTRACTED_FOLDER = "extracted"
-FACT_FOLDER = "fact"
-FILTERED = "filtered"
+CRITIC_FOLDER = "6-critic"
+EXTRACT_FOLDER = "1-extract"
+FACT_FOLDER = "5-fact"
+PAGE_FOLDER = "4-page"
 RAW_FOLDER = "raw"
+SYNTHESIS_FOLDER = "3-synthesis"
 
 # Clients
 _container_client: Optional[ContainerClient] = None
 _doc_client: Optional[DocumentIntelligenceClient] = None
 _openai_client: Optional[AsyncAzureOpenAI] = None
 _search_client: Optional[SearchClient] = None
+
+# Custom types
+Model = TypeVar("Model", bound=BaseModel)
 
 
 @app.blob_trigger(
@@ -61,7 +72,10 @@ _search_client: Optional[SearchClient] = None
     data_type=func.DataType.BINARY,
     path=f"{CONTAINER_NAME}/{RAW_FOLDER}/{{name}}",
 )
-async def raw_to_extracted(input: BlobClientTrigger) -> None:
+async def raw_to_extract(input: BlobClientTrigger) -> None:
+    """
+    First, document content is extracted from its binary form.
+    """
     # Read
     async with await _use_blob_async_client(
         name=input.blob_name,  # type: ignore
@@ -97,8 +111,8 @@ async def raw_to_extracted(input: BlobClientTrigger) -> None:
             None,  # Third, nothing
         ),
     )
-    raw_text_model = RawTextModel(
-        content=doc_result.content,
+    raw_text_model = ExtractedDocumentModel(
+        document_content=doc_result.content,
         file_path=blob_name,
         format="markdown",
         langs=[lang.locale for lang in doc_result.languages or []],
@@ -106,7 +120,7 @@ async def raw_to_extracted(input: BlobClientTrigger) -> None:
     )
     # Store
     out_path = _replace_root_path(
-        _replace_extension(blob_name, ".json"), EXTRACTED_FOLDER
+        _replace_extension(blob_name, ".json"), EXTRACT_FOLDER
     )
     out_client = await _use_blob_async_client(out_path)
     await out_client.upload_blob(
@@ -119,9 +133,12 @@ async def raw_to_extracted(input: BlobClientTrigger) -> None:
     arg_name="input",
     connection="AzureWebJobsStorage",
     data_type=func.DataType.BINARY,
-    path=f"{CONTAINER_NAME}/{EXTRACTED_FOLDER}/{{name}}",
+    path=f"{CONTAINER_NAME}/{EXTRACT_FOLDER}/{{name}}",
 )
-async def extracted_to_filtered(input: BlobClientTrigger) -> None:
+async def extract_to_chunck(input: BlobClientTrigger) -> None:
+    """
+    Second, document content is chunked into smaller parts to make it understandable by the configured LLM.
+    """
     # Read
     async with await _use_blob_async_client(
         name=input.blob_name,  # type: ignore
@@ -130,29 +147,115 @@ async def extracted_to_filtered(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing extracted blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
-    # Deserialize
-    raw_text_model = RawTextModel.model_validate_json(content)
-    # Free up memory
-    del content
-    # Remove repetitions
-    text = raw_text_model.content
-    if _is_repetition_removal(
-        text=text,
-        threshold_ratio=2.0,  # We are less strict than the paper because this is all normally internal data and we are not training a model
-    ):
-        logger.info(f"Repetition detected, skipping ({blob_name})")
-        return
-    # Clean
-    text = _clean_page(text)
-    if not text:
-        logger.info(f"Page skipped ({blob_name})")
-        return
+        chunck = await downloader.readall()
+        # Deserialize
+        extracted_model = ExtractedDocumentModel.model_validate_json(chunck)
+        # Free up memory
+        del chunck
+    # Prepare chunks for LLM
+    chuncks = _split_text(
+        text=extracted_model.document_content,
+        max_tokens=int(
+            CONFIG.llm.context * 0.8
+        ),  # For simplicity, we count tokens with a 20% margin
+    )
+    logger.info(f"Splited to {len(chuncks)} chuncks ({blob_name})")
     # Store
-    out_path = _replace_root_path(_replace_extension(blob_name, ".json"), FILTERED)
+    for i, chunck in enumerate(chuncks):  # TODO: Make this async
+        out_model = ChunkedDocumentModel(
+            chunk_content=chunck,
+            chunk_number=i,
+            file_path=extracted_model.file_path,
+            format=extracted_model.format,
+            langs=extracted_model.langs,
+            title=extracted_model.title,
+        )
+        out_path = _replace_root_path(
+            _replace_extension(blob_name, f"-{i}.json"), CHUNCK_FOLDER
+        )
+        out_client = await _use_blob_async_client(out_path)
+        await out_client.upload_blob(
+            data=out_model.model_dump_json(),
+            overwrite=True,
+        )
+
+
+@app.blob_trigger(
+    arg_name="input",
+    connection="AzureWebJobsStorage",
+    data_type=func.DataType.BINARY,
+    path=f"{CONTAINER_NAME}/{CHUNCK_FOLDER}/{{name}}",
+)
+async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
+    """
+    Third, chunks are synthesised into a coherent text.
+    """
+    # Read
+    async with await _use_blob_async_client(
+        name=input.blob_name,  # type: ignore
+        snapshot=input.snapshot,  # type: ignore
+    ) as blob_client:
+        blob_name = blob_client.blob_name
+        logger.info(f"Processing chuncked blob ({blob_name})")
+        downloader = await blob_client.download_blob()
+        content = await downloader.readall()
+        # Deserialize
+        chuncked_model = ChunkedDocumentModel.model_validate_json(content)
+        # Free up memory
+        del content
+    # LLM does its magic
+    synthesis_str = await _llm_generate_completion(
+        prompt=f"""
+        Assistant is an expert data analyst with 20 years of experience.
+
+        # Objective
+        Synthesise the document. Content come from a chunked document created with an OCR tool, it may contain errors, repetitions, or missing parts, do your best to understand it.
+
+        # Rules
+        - Answer only with the synthesis, nothing else
+        - Answers in English, even if the document is in another language
+        - Be exhaustive and complete
+        - Outline the main points but not the details
+        - Should be in a single paragraph
+        - Use only the information provided in the document
+
+        # Document metadata
+        - Format: {chuncked_model.format}
+        - Lang: {", ".join(chuncked_model.langs)}
+        - Title: {chuncked_model.title if chuncked_model.title else "N/A"}
+
+        # Response example
+        [synthesis]
+
+        ## Example 1
+        Content: Regulatory context. Scientific publications are unequivocal about the urgent challenges posed by climate change and the need for a transition to a climate-neutral economy. The International Energy Agency (IEA) asserts, in its Net Zero Emissions (NZE) scenario, that achieving carbon neutrality by 2050 and limiting warming to 1.5℃ by the end of the century requires an immediate end to all new fossil fuel exploration projects.
+        Synthesis: This document addresses the urgent challenges posed by climate change and the need for a transition to a climate-neutral economy. Drafted by the International Energy Agency (IEA), the "Net Zero Emissions" (NZE) program aims to achieve carbon neutrality and limit global warming.
+
+        ## Example 2
+        Content: Life insurance fees: In order to increase the transparency of fees on these contracts, Gan Vie undertakes to update the information below on an annual basis. Last update September 01, 2023. Introductory remarks: contract management fees correspond to fees deducted directly by the insurer from the assets in Units of Account or in Euros. Additional fees may be charged depending on the management method chosen.
+        Synthesis: Gan Vie undertakes to update information on life insurance fees annually. Fees are billed directly by the insurer, and additional fees may apply.
+
+        # Document content
+        {chuncked_model.chunk_content}
+        """,  # TODO: Add at least 5 examples for different contexts
+    )
+    # Build model
+    synthesis_model = SynthetisedDocumentModel(
+        chunk_content=chuncked_model.chunk_content,
+        chunk_number=chuncked_model.chunk_number,
+        file_path=chuncked_model.file_path,
+        format=chuncked_model.format,
+        langs=chuncked_model.langs,
+        synthesis=synthesis_str,
+        title=chuncked_model.title,
+    )
+    # Store
+    out_path = _replace_root_path(
+        _replace_extension(blob_name, ".json"), SYNTHESIS_FOLDER
+    )
     out_client = await _use_blob_async_client(out_path)
     await out_client.upload_blob(
-        data=raw_text_model.model_dump_json(),
+        data=synthesis_model.model_dump_json(),
         overwrite=True,
     )
 
@@ -161,9 +264,74 @@ async def extracted_to_filtered(input: BlobClientTrigger) -> None:
     arg_name="input",
     connection="AzureWebJobsStorage",
     data_type=func.DataType.BINARY,
-    path=f"{CONTAINER_NAME}/{FILTERED}/{{name}}",
+    path=f"{CONTAINER_NAME}/{SYNTHESIS_FOLDER}/{{name}}",
 )
-async def filtered_to_fact(input: BlobClientTrigger) -> None:
+async def synthesis_to_page(input: BlobClientTrigger) -> None:
+    """
+    Fourth, synthesises are chunked into pages.
+
+    Pages are cleaned and filtered for repetitions (indicating low-quality content).
+    """
+    # Read
+    async with await _use_blob_async_client(
+        name=input.blob_name,  # type: ignore
+        snapshot=input.snapshot,  # type: ignore
+    ) as blob_client:
+        blob_name = blob_client.blob_name
+        logger.info(f"Processing synthesis blob ({blob_name})")
+        downloader = await blob_client.download_blob()
+        page = await downloader.readall()
+        # Deserialize
+        synthesis_model = SynthetisedDocumentModel.model_validate_json(page)
+        # Free up memory
+        del page
+    # Prepare chunks for LLM
+    pages = _split_text(
+        max_tokens=int(100 / 75 * 500),  # 100 tokens ~= 75 words, ~500 words per page for a dense book
+        text=synthesis_model.chunk_content,
+    )
+    logger.info(f"Splited to {len(pages)} pages ({blob_name})")
+    # Store
+    for i, page in enumerate(pages):  # TODO: Make this async
+        if _is_repetition_removal(
+            text=page,
+            threshold_ratio=2,  # We are less strict than the paper because this is all normally internal data and we are not training a model
+        ):
+            logger.info(f"Repetition detected, skipping ({blob_name})")
+            return
+        # Clean
+        page = _clean_page(page)
+        if not page:
+            logger.info(f"Page skipped ({blob_name})")
+            return
+        out_model = PagedDocumentModel(
+            chunk_content=synthesis_model.chunk_content,
+            chunk_number=synthesis_model.chunk_number,
+            file_path=synthesis_model.file_path,
+            format=synthesis_model.format,
+            langs=synthesis_model.langs,
+            page_content=page,
+            page_number=i,
+            synthesis=synthesis_model.synthesis,
+            title=synthesis_model.title,
+        )
+        out_path = _replace_root_path(
+            _replace_extension(blob_name, f"-{i}.json"), PAGE_FOLDER
+        )
+        out_client = await _use_blob_async_client(out_path)
+        await out_client.upload_blob(
+            data=out_model.model_dump_json(),
+            overwrite=True,
+        )
+
+
+@app.blob_trigger(
+    arg_name="input",
+    connection="AzureWebJobsStorage",
+    data_type=func.DataType.BINARY,
+    path=f"{CONTAINER_NAME}/{PAGE_FOLDER}/{{name}}",
+)
+async def page_to_fact(input: BlobClientTrigger) -> None:
     # Read
     async with await _use_blob_async_client(
         name=input.blob_name,  # type: ignore
@@ -173,32 +341,61 @@ async def filtered_to_fact(input: BlobClientTrigger) -> None:
         logger.info(f"Processing repetition-filtered blob ({blob_name})")
         downloader = await blob_client.download_blob()
         content = await downloader.readall()
-    # Deserialize
-    raw_text_model = RawTextModel.model_validate_json(content)
-    # Prepare chunks for LLM
-    contents = _split_text(
-        text=raw_text_model.content,
-        max_tokens=int(
-            CONFIG.llm.context * 0.8
-        ),  # For simplicity, we count tokens with a 20% margin
-        max_chars=int(1048576 * 0.9),  # REST API has a limit of 1MB, with a 10% margin
-    )
-    logger.info(f"Splited to {len(contents)} parts ({blob_name})")
+        # Deserialize
+        paged_model = PagedDocumentModel.model_validate_json(content)
+        # Free up memory
+        del content
     # LLM does its magic
-    await asyncio.gather(
-        *[
-            _llm_generate_synthetis(
-                blob_name=_replace_extension(blob_name, f"-{i}.json"),
-                content=content,
-                format=raw_text_model.format,
-                langs=raw_text_model.langs,
-                openai_client=await _use_openai_client(),
-                title=raw_text_model.title,
-            )
-            for i, content in enumerate(contents)
-        ]
+    facted_llm_model = await _llm_generate_model(
+        model=FactedLlmModel,
+        prompt=f"""
+        Assistant is an expert data analyst with 20 years of experience.
+
+        # Objective
+        Create question/answer pairs for a document. Content come from a paged document created with an OCR tool, it may contain errors, repetitions, or missing parts, do your best to understand it.
+
+        # Rules
+        - Answers in English, even if the document is in another language
+        - Be exhaustive and complete
+        - Only use the information provided in the document
+
+        # Result format as a JSON schema
+        {json.dumps(FactedLlmModel.model_json_schema())}
+
+        # Document metadata
+        - Format: {format}
+        - Lang: {", ".join(paged_model.langs)}
+        - Title: {paged_model.title or "N/A"}
+
+        # Document synthesis
+        {paged_model.synthesis}
+
+        # Document content
+        {paged_model.page_content}
+        """,  # TODO: Add at least 5 examples for different contexts
     )
-    logger.info(f"Synthesises are generated and stored ({blob_name})")
+    # Build model
+    facted_document_model = FactedDocumentModel(
+        chunk_content=paged_model.chunk_content,
+        chunk_number=paged_model.chunk_number,
+        facts=facted_llm_model.facts,
+        file_path=paged_model.file_path,
+        format=paged_model.format,
+        langs=paged_model.langs,
+        page_content=paged_model.page_content,
+        page_number=paged_model.page_number,
+        synthesis=paged_model.synthesis,
+        title=paged_model.title,
+    )
+    # Store
+    out_path = _replace_root_path(
+        _replace_extension(blob_name, ".json"), FACT_FOLDER
+    )
+    out_client = await _use_blob_async_client(out_path)
+    await out_client.upload_blob(
+        data=facted_document_model.model_dump_json(),
+        overwrite=True,
+    )
 
 
 @app.blob_trigger(
@@ -207,7 +404,7 @@ async def filtered_to_fact(input: BlobClientTrigger) -> None:
     data_type=func.DataType.BINARY,
     path=f"{CONTAINER_NAME}/{FACT_FOLDER}/{{name}}",
 )
-async def fact_to_index(input: BlobClientTrigger) -> None:
+async def fact_to_critic(input: BlobClientTrigger) -> None:
     # Read
     async with await _use_blob_async_client(
         name=input.blob_name,  # type: ignore
@@ -217,32 +414,155 @@ async def fact_to_index(input: BlobClientTrigger) -> None:
         logger.info(f"Processing fact blob ({blob_name})")
         downloader = await blob_client.download_blob()
         content = await downloader.readall()
-    # Deserialize
-    store_model = StoreDocumentModel.model_validate_json(content)
-    # Free up memory
-    del content
+        # Deserialize
+        facted_model = FactedDocumentModel.model_validate_json(content)
+        # Free up memory
+        del content
+    # Filter facts
+    facts = await asyncio.gather(
+        *[
+            _critic_fact_filter(
+                fact=fact,
+                model=facted_model,
+            )
+            for fact in facted_model.facts
+        ]
+    )
+    facted_model.facts = [fact for fact in facts if fact]
+    if not facted_model.facts:
+        logger.info(f"No facts left, skipping")
+        return
+    # Store
+    out_path = _replace_root_path(
+        _replace_extension(blob_name, ".json"), CRITIC_FOLDER
+    )
+    out_client = await _use_blob_async_client(out_path)
+    await out_client.upload_blob(
+        data=facted_model.model_dump_json(),
+        overwrite=True,
+    )
+
+
+async def _critic_fact_filter(
+    fact: FactModel,
+    model: FactedDocumentModel,
+) -> Optional[FactedDocumentModel]:
+    score_str = await _llm_generate_completion(
+        prompt=f"""
+        Assistant is an expert data analyst with 20 years of experience.
+
+        # Objective
+        Evaluate the quality of a fact. The fact is a question/answer pair created from a paged document.
+
+        # Rules
+        - Answer only with the score, nothing else
+        - High scores indicate that the fact is likely to be correct and relevant
+        - Low scores indicate that the fact is likely to be incorrect or irrelevant
+        - Only use the information provided in the document
+        - The score should be between 0.0 and 1.0
+        - The score should reflect the quality of the fact based on the document synthesis, page content, and context
+
+        # Document metadata
+        - Format: {format}
+        - Lang: {", ".join(model.langs)}
+        - Title: {model.title or "N/A"}
+
+        # Document synthesis
+        {model.synthesis}
+
+        # Page content
+        {model.page_content}
+
+        # Response example
+        [score]
+
+        ## Example 1
+        Question: What is the capital of France?
+        Answer: Paris
+        Context: Paris, as the capital of France, is the political, economic, and cultural center of the country.
+        Score: 1.0
+
+        ## Example 2
+        Question: What is the ISIN code for the stock?
+        Answer: US0378331005
+        Context: The ISIN code for the stock is FR0000120172.
+        Score: 0.0
+
+        ## Example 3
+        Question: In which year was the company founded?
+        Answer: 1939
+        Context: The company, by its founder, was established during World War II to provide essential services to the population. Its exact founding date is unknown.
+        Score: 0.6
+
+        ## Example 4
+        Question: What is the main product of the company?
+        Answer: A software suite
+        Context: The company is known for its software suite called "Office", which includes applications such as a text editor, a spreadsheet, and a presentation program.
+        Score: 0.8
+
+
+        # Fact
+        Question: {fact.question}
+        Answer: {fact.answer}
+        Context: {fact.context}
+        """,   # TODO: Add at least 5 examples for different contexts
+    )
+    try:
+        score = float(score_str)  # LLM should return a float
+    except ValueError:
+        score = float(re.search(r"\d+\.\d+", score_str).group())  # As a fallback, we try to extract the score from the string
+    if score < 0.5:
+        logger.info(f"Low score detected ({score:.2f}), skipping")
+        logger.info(f"Question: {fact.question}")
+        logger.info(f"Answer: {fact.answer}")
+        logger.info(f"Context: {fact.context}")
+        logger.info(f"Score: {score:.2f}")
+        return
+    return fact
+
+
+@app.blob_trigger(
+    arg_name="input",
+    connection="AzureWebJobsStorage",
+    data_type=func.DataType.BINARY,
+    path=f"{CONTAINER_NAME}/{CRITIC_FOLDER}/{{name}}",
+)
+async def critic_to_index(input: BlobClientTrigger) -> None:
+    # Read
+    async with await _use_blob_async_client(
+        name=input.blob_name,  # type: ignore
+        snapshot=input.snapshot,  # type: ignore
+    ) as blob_client:
+        blob_name = blob_client.blob_name
+        logger.info(f"Processing fact blob ({blob_name})")
+        downloader = await blob_client.download_blob()
+        content = await downloader.readall()
+        # Deserialize
+        facted_model = FactedDocumentModel.model_validate_json(content)
+        # Free up memory
+        del content
     # Build indexed model
     indexed_models = [
-        IndexedFactModel(
+        IndexedDocumentModel(
             answer=fact.answer,
             context=fact.context,
-            document_synthesis=store_model.synthesis,
-            file_path=store_model.file_path,
-            id=_hash_text(f"{store_model.file_path}-{i}"),  # Reproducible ID
+            document_synthesis=facted_model.synthesis,
+            file_path=facted_model.file_path,
+            id=_hash_text(f"{facted_model.file_path}-{facted_model.chunk_number + facted_model.page_number + i}"),  # Reproducible ID over the same raw document
             question=fact.question,
         )
-        for i, fact in enumerate(store_model.facts)
+        for i, fact in enumerate(facted_model.facts)
     ]
     # Index
     logger.info(f"Indexing {len(indexed_models)} documents to AI Search ({blob_name})")
-    indexed_dicts = TypeAdapter(list[IndexedFactModel]).dump_python(
+    indexed_dicts = TypeAdapter(list[IndexedDocumentModel]).dump_python(
         indexed_models, mode="json"
     )
     search_client = await _use_search_client()
     await search_client.merge_or_upload_documents(indexed_dicts)
 
 
-def _split_text(text: str, max_tokens: int, max_chars: int) -> list[str]:
+def _split_text(text: str, max_tokens: int) -> list[str]:
     """
     Split a text into chunks of text with a maximum number of tokens and characters.
 
@@ -251,6 +571,7 @@ def _split_text(text: str, max_tokens: int, max_chars: int) -> list[str]:
     contents = []
     first_margin = 100
     last_margin = 100
+    max_chars = int(1048576 * 0.9)  # REST API has a limit of 1MB, with a 10% margin
     token_count = _count_tokens(content=text, model=CONFIG.llm.model)
 
     if token_count < max_tokens:  # For simplicity, we count tokens with a 10% margin
@@ -272,51 +593,48 @@ def _split_text(text: str, max_tokens: int, max_chars: int) -> list[str]:
     return contents
 
 
-async def _llm_generate_synthetis(
-    blob_name: str,
-    content: str,
-    format: str,
-    langs: list[str],
-    openai_client: AsyncAzureOpenAI,
-    title: Optional[str],
+async def _llm_generate_completion(
+    prompt: str,
+) -> str:
+    """
+    Generate a completion from a prompt using OpenAI.
+
+    The completion is generated using the LLM model.
+    """
+    logger.info("LLM completion generation")
+    openai_client = await _use_openai_client()
+    llm_res = await openai_client.chat.completions.create(
+        model=CONFIG.llm.model,
+        messages=[
+            ChatCompletionSystemMessageParam(
+                content=prompt,
+                role="system",
+            ),
+        ],
+    )
+    return llm_res.choices[0].message.content  # type: ignore
+
+
+async def _llm_generate_model(
+    model: Type[Model],
+    prompt: str,
     _previous_result: Optional[str] = None,
     _retries_remaining: int = 3,
     _validation_error: Optional[str] = None,
-) -> None:
+) -> Model:
     """
     Generate a synthesis from a content using OpenAI.
 
     The synthesis is generated using the LLM model. Then, the synthesis is stored in the FACT folder.
     """
     logger.info(
-        f"Generating synthesis ({blob_name}, {_retries_remaining} retries left)"
+        f"LLM model generation ({_retries_remaining} retries left)"
     )
     openai_client = await _use_openai_client()
     messages = [
         ChatCompletionSystemMessageParam(
+            content=prompt,
             role="system",
-            content=f"""
-            Assistant is an expert data analyst with 20 years of experience.
-
-            # Objective
-            Analyze the document and extract its details.
-
-            # Rules
-            - Answers in English, even if the document is in another language
-            - Be exhaustive and complete
-            - Only use the information provided in the document
-
-            # Result format as a JSON schema
-            {json.dumps(LlmDocumentModel.model_json_schema())}
-
-            # Document metadata
-            - Format: {format}
-            - Lang: {", ".join(langs)}
-            - Title: {title if title else "N/A"}
-
-            # Document content
-            {content}
-            """,
         ),
     ]
     if _validation_error:
@@ -342,35 +660,19 @@ async def _llm_generate_synthetis(
     llm_content: str = llm_res.choices[0].message.content  # type: ignore
     # Parse LLM response
     try:
-        llm_model = LlmDocumentModel.model_validate_json(llm_content)
+        model_res = model.model_validate_json(llm_content)
     except ValidationError as e:
         if _retries_remaining == 0:
             raise e
-        logger.warning(f"LLM validation error ({blob_name})")
-        return await _llm_generate_synthetis(
-            blob_name=blob_name,
-            content=content,
-            format=format,
-            langs=langs,
-            openai_client=openai_client,
-            title=title,
+        logger.warning(f"LLM validation error")
+        return await _llm_generate_model(
+            model=model,
+            prompt=prompt,
             _previous_result=llm_content,
             _retries_remaining=_retries_remaining - 1,
             _validation_error=str(e),
         )
-    # Build store model
-    store_model = StoreDocumentModel(
-        facts=llm_model.facts,
-        file_path=blob_name,
-        synthesis=llm_model.synthesis,
-    )
-    # Store
-    out_path = _replace_root_path(blob_name, FACT_FOLDER)
-    out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=store_model.model_dump_json(),
-        overwrite=True,
-    )
+    return model_res
 
 
 def _clean_page(

@@ -19,16 +19,25 @@ It includes principles taken from research papers:
 title: Workflow
 ---
 graph LR
-  enrich["Enrich"]
-  extract["Extract"]
-  filter["Filter"]
-  index[("Index")]
   raw[("Raw")]
+  extract["Extract"]
+  chunck["Chunck"]
+  synthesis["Synthetisis"]
+  page["Page"]
+  fact["Fact"]
+  critic["Critic"]
+  index[("Index")]
 
-  enrich --> index
-  extract --> filter
-  filter --> enrich
   raw --> extract
+  extract --> chunck
+  extract --> chunck
+  chunck --> synthesis
+  synthesis --> page
+  synthesis --> page
+  page --> fact
+  fact --> critic
+  critic --> index
+  critic --> index
 ```
 
 ### Features
@@ -42,7 +51,7 @@ graph LR
 - [x] Extract text from PDF, images, Microsoft Office, HTML
 - [x] Garbage data detection
 - [x] Index files from more than 1000 pages
-- [x] Remove redundant and irrelevant content by synthetic data generation
+- [x] Remove redundant and irrelevant content by synthesis data generation
 
 ### Demo
 
@@ -125,22 +134,33 @@ graph LR
 
   subgraph importer["Importer"]
     document["Document extraction\n(Document Intelligence)"]
-    func_extract["Extracted\n(Function App)"]
-    func_fact["Fact\n(Function App)"]
-    func_filter["Filtered\n(Function App)"]
-    func_index["Index\n(Function App)"]
     openai_gpt["GPT-4o\n(OpenAI)"]
+
+    func_extract["Extracted\n(Function App)"]
+    func_chunck["Chunck\n(Function App)"]
+    func_synthesis["Synthetisis\n(Function App)"]
+    func_page["Page\n(Function App)"]
+    func_fact["Fact\n(Function App)"]
+    func_critic["Critic\n(Function App)"]
+    func_index["Index\n(Function App)"]
   end
 
-  func_extract -- Ask an extract --> document
-  func_extract -- Pull from --> storage
-  func_extract -- Push to --> func_filter
+  func_extract -- Ask for extraction --> document
   func_extract -. Poll for result .-> document
-  func_fact -- Chunck content --> func_fact
-  func_fact -- Enrich data --> openai_gpt
-  func_fact -- Push to --> func_index
-  func_filter -- Deduplicate --> func_filter
-  func_filter -- Push to --> func_fact
+  func_extract -- Pull from --> storage
+  func_extract -- Push to --> func_chunck
+  func_chunck -- Split into large parts --> func_chunck
+  func_chunck -- Push to --> func_synthesis
+  func_synthesis -- Create a chunck synthesis --> openai_gpt
+  func_synthesis -- Push to --> func_page
+  func_page -- Split into small parts --> func_page
+  func_page -- Clean and filter repetitive content --> func_page
+  func_page -- Push to --> func_fact
+  func_fact -- Create Q/A pairs --> openai_gpt
+  func_fact -- Push to --> func_critic
+  func_critic -- Push to --> func_index
+  func_critic -- Create a score for each fact --> openai_gpt
+  func_critic -- Filter out irrelevant facts --> func_critic
   func_index -- Generate reproductible IDs --> func_index
   func_index -- Push to --> search_index
   search_index -. Generate embeddings .-> openai_ada
