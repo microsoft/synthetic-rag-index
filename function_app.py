@@ -374,6 +374,9 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         {paged_model.page_content}
         """,  # TODO: Add at least 5 examples for different contexts
     )
+    if not facted_llm_model.facts:
+        logger.info(f"No facts detected, skipping")
+        return
     # Build model
     facted_document_model = FactedDocumentModel(
         chunk_content=paged_model.chunk_content,
