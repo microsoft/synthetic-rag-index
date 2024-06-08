@@ -3,18 +3,42 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 
-class RawTextModel(BaseModel):
+class AbstractdDocumentModel(BaseModel):
     # Immutable fields
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), frozen=True)
     file_path: str = Field(frozen=True)
     # Editable fields
-    content: str
     format: str
-    langs: list[str]
+    langs: set[str]
     title: Optional[str]
 
 
-class LlmFactModel(BaseModel):
+class ExtractedDocumentModel(AbstractdDocumentModel):
+    # Editable fields
+    document_content: str
+
+
+class ChunkedDocumentModel(AbstractdDocumentModel):
+    # Editable fields
+    chunk_content: str
+    chunk_number: int
+
+
+class SynthetisedDocumentModel(ChunkedDocumentModel):
+    """
+    Third, chunks are synthesised into a coherent text.
+    """
+    # Editable fields
+    synthesis: str
+
+
+class PagedDocumentModel(SynthetisedDocumentModel):
+    # Editable fields
+    page_content: str
+    page_number: int
+
+
+class FactModel(BaseModel):
     # Editable fields
     question: str = Field(
         description="Question or problem of the fact. Should be in a few sentences, and end with a question. The question should avoid any ambiguity. Jargon or technical terms can be used if necessary.",
@@ -27,23 +51,22 @@ class LlmFactModel(BaseModel):
     )
 
 
-class LlmDocumentModel(BaseModel):
+class FactedLlmModel(SynthetisedDocumentModel):
     # Editable fields
-    facts: list[LlmFactModel] = Field(
-        description="List of individual facts extracted from the document. It is crutial to provide as many facts as possible.",
-    )
-    synthesis: str = Field(
-        description="Synthesis of the document. Should be in a few sentences. Anyone should be able to understand it without reading the document. Generally, it should be a summary or draw the document objectives.",
-    )
+    facts: list[FactModel]
 
 
-class StoreDocumentModel(LlmDocumentModel):
-    # Immutable fields
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), frozen=True)
-    file_path: str = Field(frozen=True)
+class FactedDocumentModel(FactedLlmModel, PagedDocumentModel):
+    """
+    Fourth, facts are synthetises from the synthesised text.
+    """
+    pass
 
 
-class IndexedFactModel(BaseModel):
+class IndexedDocumentModel(BaseModel):
+    """
+    Last, the document is indexed to be searchable by the user.
+    """
     # Immutable fields
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), frozen=True)
     id: str = Field(frozen=True)

@@ -1,6 +1,6 @@
 # 🧠 Synthetic RAG Index
 
-Service to import data from various sources (e.g. PDF, images, Microsoft Office, HTML) and index it in AI Search. Useful for RAG scenarios with LLM. Hosted in Azure with serverless architecture.
+Service to import data from various sources (e.g. PDF, images, Microsoft Office, HTML) and index it in AI Search. Increases data relevance and reduces final size by 90%+. Useful for RAG scenarios with LLM. Hosted in Azure with serverless architecture.
 
 <!-- github.com badges -->
 [![Last release date](https://img.shields.io/github/release-date/clemlesne/call-center-ai)](https://github.com/clemlesne/call-center-ai/releases)
@@ -8,27 +8,40 @@ Service to import data from various sources (e.g. PDF, images, Microsoft Office,
 
 ## Overview
 
+In a real-world scenario, with a public corpus of 15M characters (222 PDF, 7.330 pages), 2.940 facts were generated (8.41 MB indexed). That's a 93% reduction in document amount compared to the chunck method (48.111 chuncks, 300 characters each).
+
 It includes principles taken from research papers:
 
 1. Repetition removal (https://arxiv.org/abs/2112.11446)
 2. Corpus cleaning (https://arxiv.org/abs/1910.10683)
 3. Synthetic data generation (https://huggingface.co/spaces/HuggingFaceFW/blogpost-fineweb-v1)
 
+Funcional workflow is as follows:
+
 ```mermaid
 ---
 title: Workflow
 ---
 graph LR
-  enrich["Enrich"]
-  extract["Extract"]
-  filter["Filter"]
-  index[("Index")]
   raw[("Raw")]
+  extract["Extract"]
+  chunck["Chunck"]
+  synthesis["Synthetisis"]
+  page["Page"]
+  fact["Fact"]
+  critic["Critic"]
+  index[("Index")]
 
-  enrich --> index
-  extract --> filter
-  filter --> enrich
   raw --> extract
+  extract --> chunck
+  extract --> chunck
+  chunck --> synthesis
+  synthesis --> page
+  synthesis --> page
+  page --> fact
+  fact --> critic
+  critic --> index
+  critic --> index
 ```
 
 ### Features
@@ -42,57 +55,74 @@ graph LR
 - [x] Extract text from PDF, images, Microsoft Office, HTML
 - [x] Garbage data detection
 - [x] Index files from more than 1000 pages
-- [x] Remove redundant and irrelevant content by synthetic data generation
+- [x] Remove redundant and irrelevant content by synthesis data generation
+
+### Format support
+
+Document extraction is based on Azure Document Intelligence, specifically on the `prebuilt-layout` model. It [supports the following](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-layout?view=doc-intel-4.0.0&tabs=sample-code#input-requirements) formats:
+
+- HTML
+- Images: JPEG/JPG, PNG, BMP, TIFF, HEIF
+- Microsoft Office: Word (DOCX), Excel (XLSX), PowerPoint (PPTX)
+- PDF
 
 ### Demo
 
-As an example, we take the [Groupama-Resultats-offre-de-rachat-CP.pdf](examples/raw/Groupama-Resultats-offre-de-rachat-CP.pdf) file.
+As an example, we take the [code_des_assurances_2024_1.pdf](examples/raw/code_des_assurances_2024_1.pdf) file.
 
-First, data is extracted from its binary format, extracted and filtered:
+First, data is extracted from its binary format:
 
 ```json
 {
-  "content": "COMMUNIQUÉ FINANCIER\n\n<figure>\n\n![](figures/0)\n\n<!-- FigureContent=\"LE GROUPE Groupama\" -->\n\n</figure>\n\n\nLE PRÉSENT COMMUNIQUÉ NE DOIT PAS ÊTRE DIFFUSÉ AUX ÉTATS-UNIS\n\nParis, le 10 octobre 2022\n\nGroupama Assurances Mutuelles a racheté pour 228,9 millions d'euros les obligations senior subordonnées perpétuelles émises en 2014\n\nGroupama Assurance Mutuelles annonce les résultats de l'offre de rachat qui a expiré le 7 octobre 2022 sur les Obligations Senior Subordonnées Perpétuelles portant intérêt à taux fixe à puis à taux variable d'un montant de 1.100.000.000 d'euros (ISIN : FR0011896513) émises en 2014. Le montant final du rachat est de 228,9 millions d'euros.\n\nCette opération contribue à la gestion proactive de la structure de capital de Groupama.\n\n| Contact presse Safia Bouda | Contact analystes et investisseurs Valérie Buffard |\n| - | - |\n| + 33 (0)6 02 04 48 63 | +33 (0)6 70 04 12 38 |\n| safia.bouda@groupama.com | valerie.buffard@groupama.com |\n\n<!-- PageFooter=\"A propos du groupe Groupama\" -->\n\nDepuis plus de 100 ans, le Groupe Groupama, fonde son action sur des valeurs humanistes intemporelles pour permettre au plus grand nombre de construire leur vie en confiance. Le Groupe Groupama, l'un des premiers groupes d'assurance mutualistes en France, développe ses activités d'assurance, et de services dans dix pays. Le groupe compte 12 millions de sociétaires et clients et 31 000 collaborateurs à travers le monde, avec un chiffre d'affaires annuel de 15,5 milliards d'euros. Retrouvez toute l'actualité du Groupe Groupama sur son site internet (www.groupama.com)\n",
+  "created_at": "2024-06-08T19:17:51.229972Z",
+  "document_content": "Code des assurances\n===\n\ndroit. org Institut Français d'Information Juridique\n\nDernière modification: 2024-01-01 Edition : 2024-01-19 2347 articles avec 5806 liens 57 références externes\n\nCe code ne contient que du droit positif français, les articles et éléments abrogés ne sont pas inclus. Il est recalculé au fur et à mesure des mises à jour. Pensez à actualiser votre copie régulièrement à partir de codes.droit.org.\n\nCes codes ont pour objectif de démontrer l'utilité de l'ouverture des données publiques juridiques tant législatives que jurisprudentielles. Il s'y ajoute une promotion du mouvement Open Science Juridique avec une incitation au dépôt du texte intégral en accès ouvert des articles de doctrine venant du monde professionnel (Grande Bibliothèque du Droit) et universitaire (HAL-CNRS).\n\nTraitements effectués à partir des données issues des APIs Legifrance et Judilibre. droit.org remercie les acteurs du Web qui autorisent des liens vers leur production : Dictionnaire du Droit Privé (réalisé par MM. Serge Braudo et Alexis Baumann), le Conseil constitutionnel, l'Assemblée Nationale, et le Sénat. [...]",
+  "file_path": "raw/code_des_assurances_2024_1.pdf",
   "format": "markdown",
-  "langs": ["fr-FR"],
-  "title": "COMMUNIQUÉ FINANCIER"
+  "langs": ["es", "la", "fr", "ja", "en", "it", "pt", "no"],
+  "title": "Code des assurances\n==="
 }
 ```
 
-Then, multiple Q&A pairs are generated:
+Second, document is paged, and each page is synthesized to keep track of the context during all steps:
+
+```json
+{
+  "synthesis": "The \"Code des assurances\" is structured into several legislative parts and chapters, each dealing with various aspects of insurance law and regulations in France. It covers a wide range of insurance-related subjects including the operation of insurance and reinsurance contracts, the requirements for companies, the obligations of insurers and insured, and the legal framework governing insurance practices. The document includes regulations about the constitution and operation of insurance entities, rules for granting administrative approvals, conditions for opening branches and operating under free provision of services, among others.\n\nSpecifically, it addresses the following:\n1. The legislative basis for insurance contracts.\n2. Detailed provisions on maritime, aerial, and space liability insurances.\n3. Obligations for reporting and transparency in insurance practices.\n4. Rules for life insurance and capitalizations applicable in specific French regions and territories.\n5. Provisions for mandatory insurance types, like vehicle insurance, residence insurance, and insurance of construction work.\n6. Specific rules and exceptions for departments like Bas-Rhin, Haut-Rhin, and Moselle and applicability in French overseas territories. [...]"
+}
+
+```
+
+Third, multiple facts (=Q&A pairs) are generated, and those are critiqued to keep only the most relevant ones:
 
 ```json
 {
   "facts": [
     {
-      "answer": "The ISIN of the bonds is FR0011896513.",
-      "context": "The bonds in question are perpetual subordinated senior bonds with a fixed-to-variable interest rate and were originally issued in 2014.",
-      "question": "What is the ISIN of the bonds repurchased by Groupama Assurances Mutuelles?"
+      "answer": "The 'Code des assurances' only contains active French law; abrogated articles and elements are not included.",
+      "context": "This exclusion ensures that the code remains up-to-date and relevant, reflecting the current legal landscape without outdated information.",
+      "question": "What elements are excluded from the 'Code des assurances'?"
     },
     {
-      "answer": "Media can contact Safia Bouda at +33 (0)6 02 04 48 63 or via email at safia.bouda@groupama.com, and analysts can contact Valérie Buffard at +33 (0)6 70 04 12 38 or via email at valerie.buffard@groupama.com.",
-      "context": "These contact details were provided in the official financial press release by Groupama for further inquiries.",
-      "question": "How can media and analysts contact Groupama for more information?"
-    },
-    [...]
-  ],
-  "synthesis": "Groupama Assurances Mutuelles announced the repurchase of perpetual subordinated senior bonds worth 228.9 million euros, initially issued in 2014 with a total amount of 1.1 billion euros. This strategic financial maneuver aims to proactively manage the company's capital structure. The offer concluded on October 7, 2022. Groupama, a leading mutual insurance group in France, operates in ten countries with an annual revenue of 15.5 billion euros."
+      "answer": "Insurance can be contracted for the policyholder, for another specified person, or for whomever it may concern.",
+      "context": "This flexibility allows insurance policies to be tailored to various scenarios, ensuring broad applicability and relevance to different stakeholders.",
+      "question": "For whom can insurance be contracted according to the document?"
+    }
+  ]
 }
+
 ```
 
-Finally, documents are individually indexed in AI Search:
+Finally, facts are individually indexed in AI Search:
 
 ```json
-[
-  {
-    "answer": "Media can contact Safia Bouda at +33 (0)6 02 04 48 63 or via email at safia.bouda@groupama.com, and analysts can contact Valérie Buffard at +33 (0)6 70 04 12 38 or via email at valerie.buffard@groupama.com.",
-    "context": "These contact details were provided in the official financial press release by Groupama for further inquiries.",
-    "document_synthesis": "Groupama Assurances Mutuelles announced the repurchase of perpetual subordinated senior bonds worth 228.9 million euros, initially issued in 2014 with a total amount of 1.1 billion euros. This strategic financial maneuver aims to proactively manage the company's capital structure. The offer concluded on October 7, 2022. Groupama, a leading mutual insurance group in France, operates in ten countries with an annual revenue of 15.5 billion euros.",
-    "id": "ee01a3099614ebeabd61f525b5bf0561af44a0fa37101ddbaf5e6c16bfc80564",
-    "question": "How can media and analysts contact Groupama for more information?"
-  },
-  [...]
-]
+{
+  "answer": "The 'Code des assurances' only contains active French law; abrogated articles and elements are not included.",
+  "context": "This exclusion ensures that the code remains up-to-date and relevant, reflecting the current legal landscape without outdated information.",
+  "document_synthesis": "The \"Code des assurances\" is structured into several legislative parts and chapters, each dealing with various aspects of insurance law and regulations in France. It covers a wide range of insurance-related subjects including the operation of insurance and reinsurance contracts, the requirements for companies, the obligations of insurers and insured, and the legal framework governing insurance practices. The document includes regulations about the constitution and operation of insurance entities, rules for granting administrative approvals, conditions for opening branches and operating under free provision of services, among others.\n\nSpecifically, it addresses the following:\n1. The legislative basis for insurance contracts.\n2. Detailed provisions on maritime, aerial, and space liability insurances.\n3. Obligations for reporting and transparency in insurance practices.\n4. Rules for life insurance and capitalizations applicable in specific French regions and territories.\n5. Provisions for mandatory insurance types, like vehicle insurance, residence insurance, and insurance of construction work.\n6. Specific rules and exceptions for departments like Bas-Rhin, Haut-Rhin, and Moselle and applicability in French overseas territories. [...]",
+  "file_path": "raw/code_des_assurances_2024_1.pdf",
+  "id": "93e5846ba121abf6ea3328a7ff5a96b60ab97ce2016166ac0384f2e61a963d6d",
+  "question": "What elements are excluded from the 'Code des assurances'?"
+}
 ```
 
 ### High level architecture
@@ -125,26 +155,64 @@ graph LR
 
   subgraph importer["Importer"]
     document["Document extraction\n(Document Intelligence)"]
-    func_extract["Extracted\n(Function App)"]
-    func_fact["Fact\n(Function App)"]
-    func_filter["Filtered\n(Function App)"]
-    func_index["Index\n(Function App)"]
     openai_gpt["GPT-4o\n(OpenAI)"]
+
+    func_extract["Extracted\n(Function App)"]
+    func_chunck["Chunck\n(Function App)"]
+    func_synthesis["Synthetisis\n(Function App)"]
+    func_page["Page\n(Function App)"]
+    func_fact["Fact\n(Function App)"]
+    func_critic["Critic\n(Function App)"]
+    func_index["Index\n(Function App)"]
   end
 
-  func_extract -- Ask an extract --> document
-  func_extract -- Pull from --> storage
-  func_extract -- Push to --> func_filter
+  func_extract -- Ask for extraction --> document
   func_extract -. Poll for result .-> document
-  func_fact -- Chunck content --> func_fact
-  func_fact -- Enrich data --> openai_gpt
-  func_fact -- Push to --> func_index
-  func_filter -- Deduplicate --> func_filter
-  func_filter -- Push to --> func_fact
+  func_extract -- Pull from --> storage
+  func_extract -- Push to --> func_chunck
+  func_chunck -- Split into large parts --> func_chunck
+  func_chunck -- Push to --> func_synthesis
+  func_synthesis -- Create a chunck synthesis --> openai_gpt
+  func_synthesis -- Push to --> func_page
+  func_page -- Split into small parts --> func_page
+  func_page -- Clean and filter repetitive content --> func_page
+  func_page -- Push to --> func_fact
+  func_fact -- Create Q/A pairs --> openai_gpt
+  func_fact -- Push to --> func_critic
+  func_critic -- Push to --> func_index
+  func_critic -- Create a score for each fact --> openai_gpt
+  func_critic -- Filter out irrelevant facts --> func_critic
   func_index -- Generate reproductible IDs --> func_index
   func_index -- Push to --> search_index
   search_index -. Generate embeddings .-> openai_ada
 ```
+
+### Usage cost
+
+From experiments, the cost of indexing a document is around 29.15€ per 1k pages. Here is a detailed breakdown:
+
+Scenario:
+
+- 7.330 pages (15M characters)
+- 222 PDF (550.50 MB)
+- French (90%) and English (10%)
+
+Outcome:
+
+- 2.940 facts generated
+- 8.41 MB indexed on AI Search
+
+Cost:
+
+| Service | Usage | Cost (abs) | Cost (per 1k pages) |
+|-|-|-|-|
+| **Azure AI Search** | Billed per hour | N/A | N/A |
+| **Azure Blob Storage** | N/A | N/A | N/A |
+| **Azure Document Intelligence** | 7.330 pages | 67,79€ | 9.25€ |
+| **Azure Functions** | N/A | N/A | N/A |
+| **Azure OpenAI GPT-4o** (in) | 23.79M tokens | 111,81€ | 15.25€ |
+| **Azure OpenAI GPT-4o** (out) | 2.45M tokens | 34,06€ | 4.65€ |
+| **Total** | | **213,66€** | **29.15€** |
 
 ## Local installation
 
