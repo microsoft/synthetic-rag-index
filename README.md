@@ -57,39 +57,50 @@ graph LR
 
 As an example, we take the [Groupama-Resultats-offre-de-rachat-CP.pdf](examples/raw/Groupama-Resultats-offre-de-rachat-CP.pdf) file.
 
-First, data is extracted from its binary format, extracted and filtered:
+First, data is extracted from its binary format:
 
 ```json
 {
-  "content": "COMMUNIQUÉ FINANCIER\n\n<figure>\n\n![](figures/0)\n\n<!-- FigureContent=\"LE GROUPE Groupama\" -->\n\n</figure>\n\n\nLE PRÉSENT COMMUNIQUÉ NE DOIT PAS ÊTRE DIFFUSÉ AUX ÉTATS-UNIS\n\nParis, le 10 octobre 2022\n\nGroupama Assurances Mutuelles a racheté pour 228,9 millions d'euros les obligations senior subordonnées perpétuelles émises en 2014\n\nGroupama Assurance Mutuelles annonce les résultats de l'offre de rachat qui a expiré le 7 octobre 2022 sur les Obligations Senior Subordonnées Perpétuelles portant intérêt à taux fixe à puis à taux variable d'un montant de 1.100.000.000 d'euros (ISIN : FR0011896513) émises en 2014. Le montant final du rachat est de 228,9 millions d'euros.\n\nCette opération contribue à la gestion proactive de la structure de capital de Groupama.\n\n| Contact presse Safia Bouda | Contact analystes et investisseurs Valérie Buffard |\n| - | - |\n| + 33 (0)6 02 04 48 63 | +33 (0)6 70 04 12 38 |\n| safia.bouda@groupama.com | valerie.buffard@groupama.com |\n\n<!-- PageFooter=\"A propos du groupe Groupama\" -->\n\nDepuis plus de 100 ans, le Groupe Groupama, fonde son action sur des valeurs humanistes intemporelles pour permettre au plus grand nombre de construire leur vie en confiance. Le Groupe Groupama, l'un des premiers groupes d'assurance mutualistes en France, développe ses activités d'assurance, et de services dans dix pays. Le groupe compte 12 millions de sociétaires et clients et 31 000 collaborateurs à travers le monde, avec un chiffre d'affaires annuel de 15,5 milliards d'euros. Retrouvez toute l'actualité du Groupe Groupama sur son site internet (www.groupama.com)\n",
   "format": "markdown",
   "langs": ["fr-FR"],
-  "title": "COMMUNIQUÉ FINANCIER"
+  "title": "COMMUNIQUÉ FINANCIER",
+  "document_content": "COMMUNIQUÉ FINANCIER\n\n<figure>\n\n![](figures/0)\n\n<!-- FigureContent=\"LE GROUPE Groupama\" -->\n\n</figure>\n\n\nLE PRÉSENT COMMUNIQUÉ NE DOIT PAS ÊTRE DIFFUSÉ AUX ÉTATS-UNIS\n\nParis, le 10 octobre 2022\n\nGroupama Assurances Mutuelles a racheté pour 228,9 millions d'euros les obligations senior subordonnées perpétuelles émises en 2014\n\nGroupama Assurance Mutuelles annonce les résultats de l'offre de rachat qui a expiré le 7 octobre 2022 sur les Obligations Senior Subordonnées Perpétuelles portant intérêt à taux fixe à puis à taux variable d'un montant de 1.100.000.000 d'euros (ISIN : FR0011896513) émises en 2014. Le montant final du rachat est de 228,9 millions d'euros.\n\nCette opération contribue à la gestion proactive de la structure de capital de Groupama.\n\n| Contact presse Safia Bouda | Contact analystes et investisseurs Valérie Buffard |\n| - | - |\n| + 33 (0)6 02 04 48 63 | +33 (0)6 70 04 12 38 |\n| safia.bouda@groupama.com | valerie.buffard@groupama.com |\n\n<!-- PageFooter=\"A propos du groupe Groupama\" -->\n\nDepuis plus de 100 ans, le Groupe Groupama, fonde son action sur des valeurs humanistes intemporelles pour permettre au plus grand nombre de construire leur vie en confiance. Le Groupe Groupama, l'un des premiers groupes d'assurance mutualistes en France, développe ses activités d'assurance, et de services dans dix pays. Le groupe compte 12 millions de sociétaires et clients et 31 000 collaborateurs à travers le monde, avec un chiffre d'affaires annuel de 15,5 milliards d'euros. Retrouvez toute l'actualité du Groupe Groupama sur son site internet (www.groupama.com)\n"
 }
 ```
 
-Then, multiple Q&A pairs are generated:
+Second, document is paged, and each page is synthesized to keep track of the context during all steps:
+
+```json
+{
+  "chunk_content": "[...]",
+  "synthesis": "Groupama Assurances Mutuelles has repurchased perpetual subordinated senior bonds issued in 2014 for 228.9 million euros, contributing to the proactive management of its capital structure. This announcement made on October 10, 2022, follows the expiration of the repurchase offer on October 7, 2022. Groupama, a leading mutual insurance group in France with over a century of history, operates in ten countries, serving 12 million customers and employing 31,000 people, with an annual turnover of 15.5 billion euros.",
+  [...]
+}
+
+```
+
+Third, multiple facts (=Q&A pairs) are generated, and those are critiqued to keep only the most relevant ones:
 
 ```json
 {
   "facts": [
     {
-      "answer": "The ISIN of the bonds is FR0011896513.",
-      "context": "The bonds in question are perpetual subordinated senior bonds with a fixed-to-variable interest rate and were originally issued in 2014.",
-      "question": "What is the ISIN of the bonds repurchased by Groupama Assurances Mutuelles?"
+      "question": "What did Groupama Assurances Mutuelles announce regarding the bonds issued in 2014?",
+      "answer": "Groupama Assurances Mutuelles announced the repurchase of perpetual subordinated senior bonds issued in 2014 for 228.9 million euros.",
+      "context": "The bonds, initially issued in 2014 with a total amount of 1.1 billion euros and ISIN code FR0011896513, were repurchased as part of Groupama's proactive capital structure management. The announcement was made on October 10, 2022, after the repurchase offer expired on October 7, 2022."
     },
     {
-      "answer": "Media can contact Safia Bouda at +33 (0)6 02 04 48 63 or via email at safia.bouda@groupama.com, and analysts can contact Valérie Buffard at +33 (0)6 70 04 12 38 or via email at valerie.buffard@groupama.com.",
-      "context": "These contact details were provided in the official financial press release by Groupama for further inquiries.",
-      "question": "How can media and analysts contact Groupama for more information?"
-    },
-    [...]
+      "question": "When did the repurchase offer for Groupama's bonds expire?",
+      "answer": "The repurchase offer expired on October 7, 2022.",
+      "context": "Groupama made the announcement on October 10, 2022, regarding the expiration of the offer and the final repurchase amount of 228.9 million euros for the bonds issued in 2014."
+    }
   ],
-  "synthesis": "Groupama Assurances Mutuelles announced the repurchase of perpetual subordinated senior bonds worth 228.9 million euros, initially issued in 2014 with a total amount of 1.1 billion euros. This strategic financial maneuver aims to proactively manage the company's capital structure. The offer concluded on October 7, 2022. Groupama, a leading mutual insurance group in France, operates in ten countries with an annual revenue of 15.5 billion euros."
+  [...]
 }
+
 ```
 
-Finally, documents are individually indexed in AI Search:
+Finally, facts are individually indexed in AI Search:
 
 ```json
 [
