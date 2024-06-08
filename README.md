@@ -68,16 +68,18 @@ Document extraction is based on Azure Document Intelligence, specifically on the
 
 ### Demo
 
-As an example, we take the [Groupama-Resultats-offre-de-rachat-CP.pdf](examples/raw/Groupama-Resultats-offre-de-rachat-CP.pdf) file.
+As an example, we take the [code_des_assurances_2024_1.pdf](examples/raw/code_des_assurances_2024_1.pdf) file.
 
 First, data is extracted from its binary format:
 
 ```json
 {
+  "created_at": "2024-06-08T19:17:51.229972Z",
+  "document_content": "Code des assurances\n===\n\ndroit. org Institut Français d'Information Juridique\n\nDernière modification: 2024-01-01 Edition : 2024-01-19 2347 articles avec 5806 liens 57 références externes\n\nCe code ne contient que du droit positif français, les articles et éléments abrogés ne sont pas inclus. Il est recalculé au fur et à mesure des mises à jour. Pensez à actualiser votre copie régulièrement à partir de codes.droit.org.\n\nCes codes ont pour objectif de démontrer l'utilité de l'ouverture des données publiques juridiques tant législatives que jurisprudentielles. Il s'y ajoute une promotion du mouvement Open Science Juridique avec une incitation au dépôt du texte intégral en accès ouvert des articles de doctrine venant du monde professionnel (Grande Bibliothèque du Droit) et universitaire (HAL-CNRS).\n\nTraitements effectués à partir des données issues des APIs Legifrance et Judilibre. droit.org remercie les acteurs du Web qui autorisent des liens vers leur production : Dictionnaire du Droit Privé (réalisé par MM. Serge Braudo et Alexis Baumann), le Conseil constitutionnel, l'Assemblée Nationale, et le Sénat. [...]",
+  "file_path": "raw/code_des_assurances_2024_1.pdf",
   "format": "markdown",
-  "langs": ["fr-FR"],
-  "title": "COMMUNIQUÉ FINANCIER",
-  "document_content": "COMMUNIQUÉ FINANCIER\n\n<figure>\n\n![](figures/0)\n\n<!-- FigureContent=\"LE GROUPE Groupama\" -->\n\n</figure>\n\n\nLE PRÉSENT COMMUNIQUÉ NE DOIT PAS ÊTRE DIFFUSÉ AUX ÉTATS-UNIS\n\nParis, le 10 octobre 2022\n\nGroupama Assurances Mutuelles a racheté pour 228,9 millions d'euros les obligations senior subordonnées perpétuelles émises en 2014\n\nGroupama Assurance Mutuelles annonce les résultats de l'offre de rachat qui a expiré le 7 octobre 2022 sur les Obligations Senior Subordonnées Perpétuelles portant intérêt à taux fixe à puis à taux variable d'un montant de 1.100.000.000 d'euros (ISIN : FR0011896513) émises en 2014. Le montant final du rachat est de 228,9 millions d'euros.\n\nCette opération contribue à la gestion proactive de la structure de capital de Groupama.\n\n| Contact presse Safia Bouda | Contact analystes et investisseurs Valérie Buffard |\n| - | - |\n| + 33 (0)6 02 04 48 63 | +33 (0)6 70 04 12 38 |\n| safia.bouda@groupama.com | valerie.buffard@groupama.com |\n\n<!-- PageFooter=\"A propos du groupe Groupama\" -->\n\nDepuis plus de 100 ans, le Groupe Groupama, fonde son action sur des valeurs humanistes intemporelles pour permettre au plus grand nombre de construire leur vie en confiance. Le Groupe Groupama, l'un des premiers groupes d'assurance mutualistes en France, développe ses activités d'assurance, et de services dans dix pays. Le groupe compte 12 millions de sociétaires et clients et 31 000 collaborateurs à travers le monde, avec un chiffre d'affaires annuel de 15,5 milliards d'euros. Retrouvez toute l'actualité du Groupe Groupama sur son site internet (www.groupama.com)\n"
+  "langs": ["es", "la", "fr", "ja", "en", "it", "pt", "no"],
+  "title": "Code des assurances\n==="
 }
 ```
 
@@ -85,9 +87,7 @@ Second, document is paged, and each page is synthesized to keep track of the con
 
 ```json
 {
-  "chunk_content": "[...]",
-  "synthesis": "Groupama Assurances Mutuelles has repurchased perpetual subordinated senior bonds issued in 2014 for 228.9 million euros, contributing to the proactive management of its capital structure. This announcement made on October 10, 2022, follows the expiration of the repurchase offer on October 7, 2022. Groupama, a leading mutual insurance group in France with over a century of history, operates in ten countries, serving 12 million customers and employing 31,000 people, with an annual turnover of 15.5 billion euros.",
-  [...]
+  "synthesis": "The \"Code des assurances\" is structured into several legislative parts and chapters, each dealing with various aspects of insurance law and regulations in France. It covers a wide range of insurance-related subjects including the operation of insurance and reinsurance contracts, the requirements for companies, the obligations of insurers and insured, and the legal framework governing insurance practices. The document includes regulations about the constitution and operation of insurance entities, rules for granting administrative approvals, conditions for opening branches and operating under free provision of services, among others.\n\nSpecifically, it addresses the following:\n1. The legislative basis for insurance contracts.\n2. Detailed provisions on maritime, aerial, and space liability insurances.\n3. Obligations for reporting and transparency in insurance practices.\n4. Rules for life insurance and capitalizations applicable in specific French regions and territories.\n5. Provisions for mandatory insurance types, like vehicle insurance, residence insurance, and insurance of construction work.\n6. Specific rules and exceptions for departments like Bas-Rhin, Haut-Rhin, and Moselle and applicability in French overseas territories. [...]"
 }
 
 ```
@@ -98,17 +98,16 @@ Third, multiple facts (=Q&A pairs) are generated, and those are critiqued to kee
 {
   "facts": [
     {
-      "question": "What did Groupama Assurances Mutuelles announce regarding the bonds issued in 2014?",
-      "answer": "Groupama Assurances Mutuelles announced the repurchase of perpetual subordinated senior bonds issued in 2014 for 228.9 million euros.",
-      "context": "The bonds, initially issued in 2014 with a total amount of 1.1 billion euros and ISIN code FR0011896513, were repurchased as part of Groupama's proactive capital structure management. The announcement was made on October 10, 2022, after the repurchase offer expired on October 7, 2022."
+      "answer": "The 'Code des assurances' only contains active French law; abrogated articles and elements are not included.",
+      "context": "This exclusion ensures that the code remains up-to-date and relevant, reflecting the current legal landscape without outdated information.",
+      "question": "What elements are excluded from the 'Code des assurances'?"
     },
     {
-      "question": "When did the repurchase offer for Groupama's bonds expire?",
-      "answer": "The repurchase offer expired on October 7, 2022.",
-      "context": "Groupama made the announcement on October 10, 2022, regarding the expiration of the offer and the final repurchase amount of 228.9 million euros for the bonds issued in 2014."
+      "answer": "Insurance can be contracted for the policyholder, for another specified person, or for whomever it may concern.",
+      "context": "This flexibility allows insurance policies to be tailored to various scenarios, ensuring broad applicability and relevance to different stakeholders.",
+      "question": "For whom can insurance be contracted according to the document?"
     }
-  ],
-  [...]
+  ]
 }
 
 ```
@@ -116,16 +115,14 @@ Third, multiple facts (=Q&A pairs) are generated, and those are critiqued to kee
 Finally, facts are individually indexed in AI Search:
 
 ```json
-[
-  {
-    "answer": "Media can contact Safia Bouda at +33 (0)6 02 04 48 63 or via email at safia.bouda@groupama.com, and analysts can contact Valérie Buffard at +33 (0)6 70 04 12 38 or via email at valerie.buffard@groupama.com.",
-    "context": "These contact details were provided in the official financial press release by Groupama for further inquiries.",
-    "document_synthesis": "Groupama Assurances Mutuelles announced the repurchase of perpetual subordinated senior bonds worth 228.9 million euros, initially issued in 2014 with a total amount of 1.1 billion euros. This strategic financial maneuver aims to proactively manage the company's capital structure. The offer concluded on October 7, 2022. Groupama, a leading mutual insurance group in France, operates in ten countries with an annual revenue of 15.5 billion euros.",
-    "id": "ee01a3099614ebeabd61f525b5bf0561af44a0fa37101ddbaf5e6c16bfc80564",
-    "question": "How can media and analysts contact Groupama for more information?"
-  },
-  [...]
-]
+{
+  "answer": "The 'Code des assurances' only contains active French law; abrogated articles and elements are not included.",
+  "context": "This exclusion ensures that the code remains up-to-date and relevant, reflecting the current legal landscape without outdated information.",
+  "document_synthesis": "The \"Code des assurances\" is structured into several legislative parts and chapters, each dealing with various aspects of insurance law and regulations in France. It covers a wide range of insurance-related subjects including the operation of insurance and reinsurance contracts, the requirements for companies, the obligations of insurers and insured, and the legal framework governing insurance practices. The document includes regulations about the constitution and operation of insurance entities, rules for granting administrative approvals, conditions for opening branches and operating under free provision of services, among others.\n\nSpecifically, it addresses the following:\n1. The legislative basis for insurance contracts.\n2. Detailed provisions on maritime, aerial, and space liability insurances.\n3. Obligations for reporting and transparency in insurance practices.\n4. Rules for life insurance and capitalizations applicable in specific French regions and territories.\n5. Provisions for mandatory insurance types, like vehicle insurance, residence insurance, and insurance of construction work.\n6. Specific rules and exceptions for departments like Bas-Rhin, Haut-Rhin, and Moselle and applicability in French overseas territories. [...]",
+  "file_path": "raw/code_des_assurances_2024_1.pdf",
+  "id": "93e5846ba121abf6ea3328a7ff5a96b60ab97ce2016166ac0384f2e61a963d6d",
+  "question": "What elements are excluded from the 'Code des assurances'?"
+}
 ```
 
 ### High level architecture
@@ -209,7 +206,10 @@ Cost:
 
 | Service | Usage | Cost (abs) | Cost (per 1k pages) |
 |-|-|-|-|
+| **Azure AI Search** | Billed per hour | N/A | N/A |
+| **Azure Blob Storage** | N/A | N/A | N/A |
 | **Azure Document Intelligence** | 7.330 pages | 67,79€ | 9.25€ |
+| **Azure Functions** | N/A | N/A | N/A |
 | **Azure OpenAI GPT-4o** (in) | 23.79M tokens | 111,81€ | 15.25€ |
 | **Azure OpenAI GPT-4o** (out) | 2.45M tokens | 34,06€ | 4.65€ |
 | **Total** | | **213,66€** | **29.15€** |
