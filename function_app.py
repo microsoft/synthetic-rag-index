@@ -11,6 +11,7 @@ from azure.ai.documentintelligence.aio import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import (
     AnalyzeResult,
     ContentFormat,
+    DocumentAnalysisFeature,
     ParagraphRole,
 )
 from azure.core.credentials import AzureKeyCredential
@@ -93,6 +94,9 @@ async def raw_to_extract(input: BlobClientTrigger) -> None:
         content_type="application/octet-stream",
         model_id="prebuilt-layout",
         output_content_format=ContentFormat.MARKDOWN,
+        features=[
+            DocumentAnalysisFeature.LANGUAGES,
+        ]  # See: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-add-on-capabilities?view=doc-intel-4.0.0&tabs=rest-api
     )
     doc_result: AnalyzeResult = await doc_poller.result()
     # Build cracked model
@@ -115,7 +119,7 @@ async def raw_to_extract(input: BlobClientTrigger) -> None:
         document_content=doc_result.content,
         file_path=blob_name,
         format="markdown",
-        langs=[lang.locale for lang in doc_result.languages or []],
+        langs={lang.locale for lang in doc_result.languages or [] if lang.confidence > 0.5},
         title=title_paragraph.content if title_paragraph else None,
     )
     # Store

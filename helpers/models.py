@@ -9,7 +9,7 @@ class AbstractdDocumentModel(BaseModel):
     file_path: str = Field(frozen=True)
     # Editable fields
     format: str
-    langs: list[str]
+    langs: set[str]
     title: Optional[str]
 
 
