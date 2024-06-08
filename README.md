@@ -57,6 +57,15 @@ graph LR
 - [x] Index files from more than 1000 pages
 - [x] Remove redundant and irrelevant content by synthesis data generation
 
+### Format support
+
+Document extraction is based on Azure Document Intelligence, specifically on the `prebuilt-layout` model. It [supports the following](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-layout?view=doc-intel-4.0.0&tabs=sample-code#input-requirements) formats:
+
+- HTML
+- Images: JPEG/JPG, PNG, BMP, TIFF, HEIF
+- Microsoft Office: Word (DOCX), Excel (XLSX), PowerPoint (PPTX)
+- PDF
+
 ### Demo
 
 As an example, we take the [Groupama-Resultats-offre-de-rachat-CP.pdf](examples/raw/Groupama-Resultats-offre-de-rachat-CP.pdf) file.
