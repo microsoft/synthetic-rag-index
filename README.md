@@ -1,6 +1,6 @@
 # 🧠 Synthetic RAG Index
 
-Service to import data from various sources (e.g. PDF, images, Microsoft Office, HTML) and index it in AI Search. Useful for RAG scenarios with LLM. Hosted in Azure with serverless architecture.
+Service to import data from various sources (e.g. PDF, images, Microsoft Office, HTML) and index it in AI Search. Increases data relevance and reduces final size by 95%+. Useful for RAG scenarios with LLM. Hosted in Azure with serverless architecture.
 
 <!-- github.com badges -->
 [![Last release date](https://img.shields.io/github/release-date/clemlesne/call-center-ai)](https://github.com/clemlesne/call-center-ai/releases)
