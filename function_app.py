@@ -95,7 +95,10 @@ async def raw_to_extract(input: BlobClientTrigger) -> None:
         model_id="prebuilt-layout",
         output_content_format=ContentFormat.MARKDOWN,
         features=[
+            DocumentAnalysisFeature.BARCODES,
+            DocumentAnalysisFeature.FORMULAS,
             DocumentAnalysisFeature.LANGUAGES,
+            # DocumentAnalysisFeature.OCR_HIGH_RESOLUTION,  # TODO: Enable this in the config?
         ]  # See: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-add-on-capabilities?view=doc-intel-4.0.0&tabs=rest-api
     )
     doc_result: AnalyzeResult = await doc_poller.result()
