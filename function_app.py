@@ -633,7 +633,7 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
         indexed_models, mode="json"
     )
     search_client = await _use_search_client()
-    await search_client.merge_or_upload_documents(indexed_dicts)
+    await search_client.merge_or_upload_documents(indexed_dicts)  # Will overwrite existing documents
 
 
 def _split_text(text: str, max_tokens: int) -> list[str]:
