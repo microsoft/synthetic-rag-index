@@ -15,7 +15,9 @@ from azure.ai.documentintelligence.models import (
     ParagraphRole,
 )
 from azure.core.credentials import AzureKeyCredential
+from azure.core.exceptions import ResourceExistsError
 from azure.search.documents.aio import SearchClient
+from azure.storage.blob import BlobProperties
 from azure.storage.blob.aio import BlobClient, ContainerClient
 from azurefunctions.extensions.bindings.blob import BlobClient as BlobClientTrigger
 from helpers.http import azure_transport
@@ -44,6 +46,7 @@ from helpers.models import (
 import re
 import pikepdf
 from io import BytesIO
+from base64 import b64encode
 
 
 # Azure Functions
@@ -136,6 +139,8 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
         snapshot=input.snapshot,  # type: ignore
     ) as blob_client:
         blob_name = blob_client.blob_name
+        blob_properties: BlobProperties = await blob_client.get_blob_properties()
+        blob_md5 = b64encode(blob_properties.content_settings.content_md5).hex()  # See: https://github.com/Azure/azure-sdk-for-python/issues/13104#issuecomment-678033167
         logger.info(f"Processing raw blob ({blob_name})")
         downloader = await blob_client.download_blob()
         content = await downloader.readall()  # TODO: Use stream (files can be large)
@@ -173,20 +178,19 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
     )
     raw_text_model = ExtractedDocumentModel(
         document_content=doc_result.content,
+        file_md5=blob_md5,
         file_path=blob_name,
         format="markdown",
         langs={lang.locale for lang in doc_result.languages or [] if lang.confidence > 0.5},
         title=title_paragraph.content if title_paragraph else None,
     )
     # Store
-    out_path = _replace_root_path(
-        _replace_extension(blob_name, ".json"), EXTRACT_FOLDER
-    )
+    out_path = f"{EXTRACT_FOLDER}/{blob_md5}.json"
     out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=raw_text_model.model_dump_json(),
-        overwrite=True,
-    )
+    try:
+        await out_client.upload_blob(data=raw_text_model.model_dump_json())
+    except ResourceExistsError:
+        logger.info(f"Document already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -225,6 +229,7 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         out_model = ChunkedDocumentModel(
             chunk_content=chunck,
             chunk_number=i,
+            file_md5=extracted_model.file_md5,
             file_path=extracted_model.file_path,
             format=extracted_model.format,
             langs=extracted_model.langs,
@@ -234,10 +239,10 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
             _replace_extension(blob_name, f"-{i}.json"), CHUNCK_FOLDER
         )
         out_client = await _use_blob_async_client(out_path)
-        await out_client.upload_blob(
-            data=out_model.model_dump_json(),
-            overwrite=True,
-        )
+        try:
+            await out_client.upload_blob(data=out_model.model_dump_json())
+        except ResourceExistsError:
+            logger.info(f"Chunck already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -303,6 +308,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
     synthesis_model = SynthetisedDocumentModel(
         chunk_content=chuncked_model.chunk_content,
         chunk_number=chuncked_model.chunk_number,
+        file_md5=chuncked_model.file_md5,
         file_path=chuncked_model.file_path,
         format=chuncked_model.format,
         langs=chuncked_model.langs,
@@ -314,10 +320,10 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         _replace_extension(blob_name, ".json"), SYNTHESIS_FOLDER
     )
     out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=synthesis_model.model_dump_json(),
-        overwrite=True,
-    )
+    try:
+        await out_client.upload_blob(data=synthesis_model.model_dump_json())
+    except ResourceExistsError:
+        logger.info(f"Synthesis already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -353,20 +359,22 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
     logger.info(f"Splited to {len(pages)} pages ({blob_name})")
     # Store
     for i, page in enumerate(pages):  # TODO: Make this async
-        if _is_repetition_removal(
-            text=page,
-            threshold_ratio=2,  # We are less strict than the paper because this is all normally internal data and we are not training a model
-        ):
-            logger.info(f"Repetition detected, skipping ({blob_name})")
-            return
-        # Clean
+        # First, clean
         page = _clean_page(page)
         if not page:
             logger.info(f"Page skipped ({blob_name})")
             return
+        # Second, filter-out pages with excessive repetition
+        if _is_repetition_removal(
+            text=page,
+            threshold_ratio=1.5,  # We are less strict than the paper because this is all normally internal data and we are not training a model
+        ):
+            logger.info(f"Repetition detected, skipping ({blob_name})")
+            return
         out_model = PagedDocumentModel(
             chunk_content=synthesis_model.chunk_content,
             chunk_number=synthesis_model.chunk_number,
+            file_md5=synthesis_model.file_md5,
             file_path=synthesis_model.file_path,
             format=synthesis_model.format,
             langs=synthesis_model.langs,
@@ -379,10 +387,10 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
             _replace_extension(blob_name, f"-{i}.json"), PAGE_FOLDER
         )
         out_client = await _use_blob_async_client(out_path)
-        await out_client.upload_blob(
-            data=out_model.model_dump_json(),
-            overwrite=True,
-        )
+        try:
+            await out_client.upload_blob(data=out_model.model_dump_json())
+        except ResourceExistsError:
+            logger.info(f"Page already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -442,6 +450,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         chunk_content=paged_model.chunk_content,
         chunk_number=paged_model.chunk_number,
         facts=facted_llm_model.facts,
+        file_md5=paged_model.file_md5,
         file_path=paged_model.file_path,
         format=paged_model.format,
         langs=paged_model.langs,
@@ -455,10 +464,10 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         _replace_extension(blob_name, ".json"), FACT_FOLDER
     )
     out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=facted_document_model.model_dump_json(),
-        overwrite=True,
-    )
+    try:
+        await out_client.upload_blob(data=facted_document_model.model_dump_json())
+    except ResourceExistsError:
+        logger.info(f"Fact already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -500,10 +509,10 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         _replace_extension(blob_name, ".json"), CRITIC_FOLDER
     )
     out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=facted_model.model_dump_json(),
-        overwrite=True,
-    )
+    try:
+        await out_client.upload_blob(data=facted_model.model_dump_json())
+    except ResourceExistsError:
+        logger.info(f"Critic already exists, skipping ({blob_name})")
 
 
 async def _critic_fact_filter(
@@ -825,7 +834,7 @@ def _is_repetition_removal(
     visit_lines = {}
 
     # Check for repeated lines
-    for line in text.split("\n"):
+    for line in text.splitlines():
         line_hash = _hash_text(line)
         if line_hash in visit_lines:
             dup_line += 1
@@ -885,9 +894,13 @@ def _is_repetition_removal(
 
 def _hash_text(text: str) -> str:
     """
-    Hash a text using SHA-256.
+    Hash a text using MD5.
+
+    MD5 is as of today the fastest hash function available. It has collision vulnerabilities, but it is not a concern in this context.
+
+    Return the MD5 hash of the text.
     """
-    return hashlib.sha256(
+    return hashlib.md5(
         string=text.encode(),
         usedforsecurity=False,
     ).hexdigest()
