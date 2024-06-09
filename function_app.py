@@ -997,6 +997,7 @@ async def _use_doc_client() -> DocumentIntelligenceClient:
             # Deployment
             endpoint=CONFIG.document_intelligence.endpoint,
             # Performance
+            polling_interval=5,  # 5 seconds
             transport=await azure_transport(),
             # Authentication
             credential=AzureKeyCredential(
