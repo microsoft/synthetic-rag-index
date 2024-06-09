@@ -15,7 +15,9 @@ from azure.ai.documentintelligence.models import (
     ParagraphRole,
 )
 from azure.core.credentials import AzureKeyCredential
+from azure.core.exceptions import ResourceExistsError
 from azure.search.documents.aio import SearchClient
+from azure.storage.blob import BlobProperties
 from azure.storage.blob.aio import BlobClient, ContainerClient
 from azurefunctions.extensions.bindings.blob import BlobClient as BlobClientTrigger
 from helpers.http import azure_transport
@@ -42,6 +44,9 @@ from helpers.models import (
     SynthetisedDocumentModel,
 )
 import re
+import pikepdf
+from io import BytesIO
+from base64 import b64encode
 
 
 # Azure Functions
@@ -55,6 +60,7 @@ EXTRACT_FOLDER = "1-extract"
 FACT_FOLDER = "5-fact"
 PAGE_FOLDER = "4-page"
 RAW_FOLDER = "raw"
+SANITIZE_FOLDER = "0-sanitize"
 SYNTHESIS_FOLDER = "3-synthesis"
 
 # Clients
@@ -73,9 +79,11 @@ Model = TypeVar("Model", bound=BaseModel)
     data_type=func.DataType.BINARY,
     path=f"{CONTAINER_NAME}/{RAW_FOLDER}/{{name}}",
 )
-async def raw_to_extract(input: BlobClientTrigger) -> None:
+async def raw_to_sanitize(input: BlobClientTrigger) -> None:
     """
-    First, document content is extracted from its binary form.
+    First, raw documents are sanitized to remove any sensitive information.
+
+    For PDF, QPDF (https://github.com/qpdf/qpdf) is used (from pikepdf) to save the document in a safe format.
     """
     # Read
     async with await _use_blob_async_client(
@@ -85,21 +93,72 @@ async def raw_to_extract(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing raw blob ({blob_name})")
         downloader = await blob_client.download_blob()
+        in_bytes = BytesIO()
+        await downloader.readinto(in_bytes)
+    if _detect_extension(blob_name) == ".pdf":  # Sanitize PDF
+        with pikepdf.open(in_bytes) as pdf:
+            target_version = "1.4"
+            logger.info(f"Sanitizing PDF from v{pdf.pdf_version} to v{target_version} ({blob_name})")
+            out_stream = BytesIO()
+            pdf.save(
+                deterministic_id=True,  # Deterministic document ID for caching
+                filename_or_stream=out_stream,
+                linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
+                min_version=target_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
+            )
+            # Store
+            out_path = _replace_root_path(blob_name, SANITIZE_FOLDER)
+            out_client = await _use_blob_async_client(out_path)
+            await out_client.upload_blob(
+                data=out_stream.getbuffer(),
+                overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
+            )
+    else:  # Store as is
+        logger.info(f"Storing raw blob as is ({blob_name})")
+        out_path = _replace_root_path(blob_name, SANITIZE_FOLDER)
+        out_client = await _use_blob_async_client(out_path)
+        await out_client.upload_blob(
+            data=in_bytes.getbuffer(),
+            overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
+        )
+
+
+@app.blob_trigger(
+    arg_name="input",
+    connection="AzureWebJobsStorage",
+    data_type=func.DataType.BINARY,
+    path=f"{CONTAINER_NAME}/{SANITIZE_FOLDER}/{{name}}",
+)
+async def sanitize_to_extract(input: BlobClientTrigger) -> None:
+    """
+    First, document content is extracted from its binary form.
+    """
+    # Read
+    async with await _use_blob_async_client(
+        name=input.blob_name,  # type: ignore
+        snapshot=input.snapshot,  # type: ignore
+    ) as blob_client:
+        blob_name = blob_client.blob_name
+        blob_properties: BlobProperties = await blob_client.get_blob_properties()
+        blob_md5 = b64encode(blob_properties.content_settings.content_md5).hex()  # See: https://github.com/Azure/azure-sdk-for-python/issues/13104#issuecomment-678033167
+        logger.info(f"Processing raw blob ({blob_name})")
+        downloader = await blob_client.download_blob()
         content = await downloader.readall()  # TODO: Use stream (files can be large)
     # Analyze document
     logger.info(f"Analyzing document ({blob_name})")
+    features: list[DocumentAnalysisFeature] = []
+    if _detect_extension(blob_name) in [".pdf", ".jpeg", ".jpg", ".png", ".bmp", ".tiff", ".heif", ".heic"]:
+        features.append(DocumentAnalysisFeature.BARCODES)
+        features.append(DocumentAnalysisFeature.FORMULAS)
+        features.append(DocumentAnalysisFeature.LANGUAGES)
+    logger.info(f"Features enabled: {features}")
     doc_client = await _use_doc_client()
     doc_poller = await doc_client.begin_analyze_document(
         analyze_request=content,  # type: ignore
         content_type="application/octet-stream",
+        features=features,  # See: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-add-on-capabilities?view=doc-intel-4.0.0&tabs=rest-api
         model_id="prebuilt-layout",
         output_content_format=ContentFormat.MARKDOWN,
-        features=[
-            DocumentAnalysisFeature.BARCODES,
-            DocumentAnalysisFeature.FORMULAS,
-            DocumentAnalysisFeature.LANGUAGES,
-            # DocumentAnalysisFeature.OCR_HIGH_RESOLUTION,  # TODO: Enable this in the config?
-        ]  # See: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-add-on-capabilities?view=doc-intel-4.0.0&tabs=rest-api
     )
     doc_result: AnalyzeResult = await doc_poller.result()
     # Build cracked model
@@ -120,20 +179,19 @@ async def raw_to_extract(input: BlobClientTrigger) -> None:
     )
     raw_text_model = ExtractedDocumentModel(
         document_content=doc_result.content,
+        file_md5=blob_md5,
         file_path=blob_name,
         format="markdown",
         langs={lang.locale for lang in doc_result.languages or [] if lang.confidence > 0.5},
         title=title_paragraph.content if title_paragraph else None,
     )
     # Store
-    out_path = _replace_root_path(
-        _replace_extension(blob_name, ".json"), EXTRACT_FOLDER
-    )
+    out_path = f"{EXTRACT_FOLDER}/{blob_md5}.json"
     out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=raw_text_model.model_dump_json(),
-        overwrite=True,
-    )
+    try:
+        await out_client.upload_blob(data=raw_text_model.model_dump_json())
+    except ResourceExistsError:
+        logger.info(f"Document already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -172,6 +230,7 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         out_model = ChunkedDocumentModel(
             chunk_content=chunck,
             chunk_number=i,
+            file_md5=extracted_model.file_md5,
             file_path=extracted_model.file_path,
             format=extracted_model.format,
             langs=extracted_model.langs,
@@ -181,10 +240,10 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
             _replace_extension(blob_name, f"-{i}.json"), CHUNCK_FOLDER
         )
         out_client = await _use_blob_async_client(out_path)
-        await out_client.upload_blob(
-            data=out_model.model_dump_json(),
-            overwrite=True,
-        )
+        try:
+            await out_client.upload_blob(data=out_model.model_dump_json())
+        except ResourceExistsError:
+            logger.info(f"Chunck already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -212,6 +271,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         del content
     # LLM does its magic
     synthesis_str = await _llm_generate_completion(
+        max_tokens=500,  # 500 tokens ~= 375 words
         prompt=f"""
         Assistant is an expert data analyst with 20 years of experience.
 
@@ -250,6 +310,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
     synthesis_model = SynthetisedDocumentModel(
         chunk_content=chuncked_model.chunk_content,
         chunk_number=chuncked_model.chunk_number,
+        file_md5=chuncked_model.file_md5,
         file_path=chuncked_model.file_path,
         format=chuncked_model.format,
         langs=chuncked_model.langs,
@@ -261,10 +322,10 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         _replace_extension(blob_name, ".json"), SYNTHESIS_FOLDER
     )
     out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=synthesis_model.model_dump_json(),
-        overwrite=True,
-    )
+    try:
+        await out_client.upload_blob(data=synthesis_model.model_dump_json())
+    except ResourceExistsError:
+        logger.info(f"Synthesis already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -300,20 +361,22 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
     logger.info(f"Splited to {len(pages)} pages ({blob_name})")
     # Store
     for i, page in enumerate(pages):  # TODO: Make this async
-        if _is_repetition_removal(
-            text=page,
-            threshold_ratio=2,  # We are less strict than the paper because this is all normally internal data and we are not training a model
-        ):
-            logger.info(f"Repetition detected, skipping ({blob_name})")
-            return
-        # Clean
+        # First, clean
         page = _clean_page(page)
         if not page:
             logger.info(f"Page skipped ({blob_name})")
             return
+        # Second, filter-out pages with excessive repetition
+        if _is_repetition_removal(
+            text=page,
+            threshold_ratio=1.5,  # We are less strict than the paper because this is all normally internal data and we are not training a model
+        ):
+            logger.info(f"Repetition detected, skipping ({blob_name})")
+            return
         out_model = PagedDocumentModel(
             chunk_content=synthesis_model.chunk_content,
             chunk_number=synthesis_model.chunk_number,
+            file_md5=synthesis_model.file_md5,
             file_path=synthesis_model.file_path,
             format=synthesis_model.format,
             langs=synthesis_model.langs,
@@ -326,10 +389,10 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
             _replace_extension(blob_name, f"-{i}.json"), PAGE_FOLDER
         )
         out_client = await _use_blob_async_client(out_path)
-        await out_client.upload_blob(
-            data=out_model.model_dump_json(),
-            overwrite=True,
-        )
+        try:
+            await out_client.upload_blob(data=out_model.model_dump_json())
+        except ResourceExistsError:
+            logger.info(f"Page already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -389,6 +452,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         chunk_content=paged_model.chunk_content,
         chunk_number=paged_model.chunk_number,
         facts=facted_llm_model.facts,
+        file_md5=paged_model.file_md5,
         file_path=paged_model.file_path,
         format=paged_model.format,
         langs=paged_model.langs,
@@ -402,10 +466,10 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         _replace_extension(blob_name, ".json"), FACT_FOLDER
     )
     out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=facted_document_model.model_dump_json(),
-        overwrite=True,
-    )
+    try:
+        await out_client.upload_blob(data=facted_document_model.model_dump_json())
+    except ResourceExistsError:
+        logger.info(f"Fact already exists, skipping ({blob_name})")
 
 
 @app.blob_trigger(
@@ -447,10 +511,10 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         _replace_extension(blob_name, ".json"), CRITIC_FOLDER
     )
     out_client = await _use_blob_async_client(out_path)
-    await out_client.upload_blob(
-        data=facted_model.model_dump_json(),
-        overwrite=True,
-    )
+    try:
+        await out_client.upload_blob(data=facted_model.model_dump_json())
+    except ResourceExistsError:
+        logger.info(f"Critic already exists, skipping ({blob_name})")
 
 
 async def _critic_fact_filter(
@@ -458,6 +522,7 @@ async def _critic_fact_filter(
     model: FactedDocumentModel,
 ) -> Optional[FactedDocumentModel]:
     score_str = await _llm_generate_completion(
+        max_tokens=10,  # We only need a float score
         prompt=f"""
         Assistant is an expert data analyst with 20 years of experience.
 
@@ -558,7 +623,7 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
             context=fact.context,
             document_synthesis=facted_model.synthesis,
             file_path=facted_model.file_path,
-            id=_hash_text(f"{facted_model.file_path}-{facted_model.chunk_number + facted_model.page_number + i}"),  # Reproducible ID over the same raw document
+            id=_hash_text(f"{facted_model.file_md5}-{facted_model.chunk_number + facted_model.page_number + i}"),  # Reproducible ID over the same raw document
             question=fact.question,
         )
         for i, fact in enumerate(facted_model.facts)
@@ -569,7 +634,7 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
         indexed_models, mode="json"
     )
     search_client = await _use_search_client()
-    await search_client.merge_or_upload_documents(indexed_dicts)
+    await search_client.merge_or_upload_documents(indexed_dicts)  # Will overwrite existing documents
 
 
 def _split_text(text: str, max_tokens: int) -> list[str]:
@@ -604,6 +669,7 @@ def _split_text(text: str, max_tokens: int) -> list[str]:
 
 
 async def _llm_generate_completion(
+    max_tokens: int,
     prompt: str,
 ) -> str:
     """
@@ -614,6 +680,7 @@ async def _llm_generate_completion(
     logger.info("LLM completion generation")
     openai_client = await _use_openai_client()
     llm_res = await openai_client.chat.completions.create(
+        max_tokens=max_tokens,
         model=CONFIG.llm.model,
         messages=[
             ChatCompletionSystemMessageParam(
@@ -772,7 +839,7 @@ def _is_repetition_removal(
     visit_lines = {}
 
     # Check for repeated lines
-    for line in text.split("\n"):
+    for line in text.splitlines():
         line_hash = _hash_text(line)
         if line_hash in visit_lines:
             dup_line += 1
@@ -832,9 +899,13 @@ def _is_repetition_removal(
 
 def _hash_text(text: str) -> str:
     """
-    Hash a text using SHA-256.
+    Hash a text using MD5.
+
+    MD5 is as of today the fastest hash function available. It has collision vulnerabilities, but it is not a concern in this context.
+
+    Return the MD5 hash of the text.
     """
-    return hashlib.sha256(
+    return hashlib.md5(
         string=text.encode(),
         usedforsecurity=False,
     ).hexdigest()
@@ -870,6 +941,17 @@ def _replace_extension(file_path: str, new_extension: str) -> str:
     For example, if the file path is "file.txt" and the new extension is "json", the new file path will be "file.json".
     """
     return "".join(file_path.split(".")[:-1]) + new_extension
+
+
+def _detect_extension(file_path: str) -> str:
+    """
+    Detect the extension of a file path.
+
+    For example, if the file path is "file.txt", the extension will be ".txt".
+
+    Return the extension in lowercase.
+    """
+    return "." + file_path.lower().split(".")[-1]
 
 
 async def _use_blob_async_client(
@@ -915,6 +997,7 @@ async def _use_doc_client() -> DocumentIntelligenceClient:
             # Deployment
             endpoint=CONFIG.document_intelligence.endpoint,
             # Performance
+            polling_interval=5,  # 5 seconds
             transport=await azure_transport(),
             # Authentication
             credential=AzureKeyCredential(

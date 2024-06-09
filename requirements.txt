@@ -8,6 +8,7 @@ azure-search-documents==11.6.0b3
 azurefunctions-extensions-bindings-blob==1.0.0b1
 nltk==3.8.1
 openai==1.30.3
+pikepdf==9.0.0
 pydantic-settings==2.2.1
 pydantic==2.7.1
 python-dotenv==1.0.1

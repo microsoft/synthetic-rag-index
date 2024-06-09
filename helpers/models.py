@@ -6,6 +6,7 @@ from typing import Optional
 class AbstractdDocumentModel(BaseModel):
     # Immutable fields
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), frozen=True)
+    file_md5: str = Field(frozen=True)
     file_path: str = Field(frozen=True)
     # Editable fields
     format: str
