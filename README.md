@@ -24,6 +24,7 @@ title: Workflow
 ---
 graph LR
   raw[("Raw")]
+  sanitize["Sanitize"]
   extract["Extract"]
   chunck["Chunck"]
   synthesis["Synthetisis"]
@@ -32,12 +33,13 @@ graph LR
   critic["Critic"]
   index[("Index")]
 
-  raw --> extract
-  extract --> chunck
+  raw --> sanitize
+  sanitize --> extract
   extract --> chunck
   chunck --> synthesis
+  chunck --> synthesis
   synthesis --> page
-  synthesis --> page
+  page --> fact
   page --> fact
   fact --> critic
   critic --> index
@@ -157,18 +159,22 @@ graph LR
     document["Document extraction\n(Document Intelligence)"]
     openai_gpt["GPT-4o\n(OpenAI)"]
 
-    func_extract["Extracted\n(Function App)"]
     func_chunck["Chunck\n(Function App)"]
-    func_synthesis["Synthetisis\n(Function App)"]
-    func_page["Page\n(Function App)"]
-    func_fact["Fact\n(Function App)"]
     func_critic["Critic\n(Function App)"]
+    func_extract["Extracted\n(Function App)"]
+    func_fact["Fact\n(Function App)"]
     func_index["Index\n(Function App)"]
+    func_page["Page\n(Function App)"]
+    func_sanitize["Sanitize\n(Function App)"]
+    func_synthesis["Synthetisis\n(Function App)"]
   end
 
+
+  func_sanitize -- Pull from --> storage
+  func_sanitize -- Convert and linearize --> func_sanitize
+  func_sanitize -- Push to --> func_extract
   func_extract -- Ask for extraction --> document
   func_extract -. Poll for result .-> document
-  func_extract -- Pull from --> storage
   func_extract -- Push to --> func_chunck
   func_chunck -- Split into large parts --> func_chunck
   func_chunck -- Push to --> func_synthesis

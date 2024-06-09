@@ -42,6 +42,8 @@ from helpers.models import (
     SynthetisedDocumentModel,
 )
 import re
+import pikepdf
+from io import BytesIO
 
 
 # Azure Functions
@@ -55,6 +57,7 @@ EXTRACT_FOLDER = "1-extract"
 FACT_FOLDER = "5-fact"
 PAGE_FOLDER = "4-page"
 RAW_FOLDER = "raw"
+SANITIZE_FOLDER = "0-sanitize"
 SYNTHESIS_FOLDER = "3-synthesis"
 
 # Clients
@@ -73,7 +76,57 @@ Model = TypeVar("Model", bound=BaseModel)
     data_type=func.DataType.BINARY,
     path=f"{CONTAINER_NAME}/{RAW_FOLDER}/{{name}}",
 )
-async def raw_to_extract(input: BlobClientTrigger) -> None:
+async def raw_to_sanitize(input: BlobClientTrigger) -> None:
+    """
+    First, raw documents are sanitized to remove any sensitive information.
+
+    For PDF, QPDF (https://github.com/qpdf/qpdf) is used (from pikepdf) to save the document in a safe format.
+    """
+    # Read
+    async with await _use_blob_async_client(
+        name=input.blob_name,  # type: ignore
+        snapshot=input.snapshot,  # type: ignore
+    ) as blob_client:
+        blob_name = blob_client.blob_name
+        logger.info(f"Processing raw blob ({blob_name})")
+        downloader = await blob_client.download_blob()
+        in_bytes = BytesIO()
+        await downloader.readinto(in_bytes)
+    if _detect_extension(blob_name) == ".pdf":  # Sanitize PDF
+        with pikepdf.open(in_bytes) as pdf:
+            target_version = "1.4"
+            logger.info(f"Sanitizing PDF from v{pdf.pdf_version} to v{target_version} ({blob_name})")
+            out_stream = BytesIO()
+            pdf.save(
+                deterministic_id=True,  # Deterministic document ID for caching
+                filename_or_stream=out_stream,
+                linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
+                min_version=target_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
+            )
+            # Store
+            out_path = _replace_root_path(blob_name, SANITIZE_FOLDER)
+            out_client = await _use_blob_async_client(out_path)
+            await out_client.upload_blob(
+                data=out_stream.getbuffer(),
+                overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
+            )
+    else:  # Store as is
+        logger.info(f"Storing raw blob as is ({blob_name})")
+        out_path = _replace_root_path(blob_name, SANITIZE_FOLDER)
+        out_client = await _use_blob_async_client(out_path)
+        await out_client.upload_blob(
+            data=in_bytes.getbuffer(),
+            overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
+        )
+
+
+@app.blob_trigger(
+    arg_name="input",
+    connection="AzureWebJobsStorage",
+    data_type=func.DataType.BINARY,
+    path=f"{CONTAINER_NAME}/{SANITIZE_FOLDER}/{{name}}",
+)
+async def sanitize_to_extract(input: BlobClientTrigger) -> None:
     """
     First, document content is extracted from its binary form.
     """
@@ -870,6 +923,17 @@ def _replace_extension(file_path: str, new_extension: str) -> str:
     For example, if the file path is "file.txt" and the new extension is "json", the new file path will be "file.json".
     """
     return "".join(file_path.split(".")[:-1]) + new_extension
+
+
+def _detect_extension(file_path: str) -> str:
+    """
+    Detect the extension of a file path.
+
+    For example, if the file path is "file.txt", the extension will be ".txt".
+
+    Return the extension in lowercase.
+    """
+    return "." + file_path.lower().split(".")[-1]
 
 
 async def _use_blob_async_client(
