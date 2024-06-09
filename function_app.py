@@ -182,7 +182,7 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
         file_md5=blob_md5,
         file_path=blob_name,
         format="markdown",
-        langs={lang.locale for lang in doc_result.languages or [] if lang.confidence > 0.5},
+        langs={lang.locale for lang in doc_result.languages or [] if lang.confidence > 0.75},
         title=title_paragraph.content if title_paragraph else None,
     )
     # Store
