@@ -270,6 +270,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         del content
     # LLM does its magic
     synthesis_str = await _llm_generate_completion(
+        max_tokens=500,  # 500 tokens ~= 375 words
         prompt=f"""
         Assistant is an expert data analyst with 20 years of experience.
 
@@ -520,6 +521,7 @@ async def _critic_fact_filter(
     model: FactedDocumentModel,
 ) -> Optional[FactedDocumentModel]:
     score_str = await _llm_generate_completion(
+        max_tokens=10,  # We only need a float score
         prompt=f"""
         Assistant is an expert data analyst with 20 years of experience.
 
@@ -666,6 +668,7 @@ def _split_text(text: str, max_tokens: int) -> list[str]:
 
 
 async def _llm_generate_completion(
+    max_tokens: int,
     prompt: str,
 ) -> str:
     """
@@ -676,6 +679,7 @@ async def _llm_generate_completion(
     logger.info("LLM completion generation")
     openai_client = await _use_openai_client()
     llm_res = await openai_client.chat.completions.create(
+        max_tokens=max_tokens,
         model=CONFIG.llm.model,
         messages=[
             ChatCompletionSystemMessageParam(
