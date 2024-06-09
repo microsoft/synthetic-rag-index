@@ -288,7 +288,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
 
         # Document metadata
         - Format: {chuncked_model.format}
-        - Lang: {", ".join(chuncked_model.langs)}
+        - Lang: {", ".join(chuncked_model.langs) if chuncked_model.langs else "N/A"}
         - Title: {chuncked_model.title if chuncked_model.title else "N/A"}
 
         # Response example
@@ -434,7 +434,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
 
         # Document metadata
         - Format: {format}
-        - Lang: {", ".join(paged_model.langs)}
+        - Lang: {", ".join(paged_model.langs) if paged_model.langs else "N/A"}
         - Title: {paged_model.title or "N/A"}
 
         # Document synthesis
@@ -539,7 +539,7 @@ async def _critic_fact_filter(
 
         # Document metadata
         - Format: {format}
-        - Lang: {", ".join(model.langs)}
+        - Lang: {", ".join(model.langs) if model.langs else "N/A"}
         - Title: {model.title or "N/A"}
 
         # Document synthesis
