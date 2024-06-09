@@ -146,18 +146,19 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
         content = await downloader.readall()  # TODO: Use stream (files can be large)
     # Analyze document
     logger.info(f"Analyzing document ({blob_name})")
+    features: list[DocumentAnalysisFeature] = []
+    if _detect_extension(blob_name) in [".pdf", ".jpeg", ".jpg", ".png", ".bmp", ".tiff", ".heif", ".heic"]:
+        features.append(DocumentAnalysisFeature.BARCODES)
+        features.append(DocumentAnalysisFeature.FORMULAS)
+        features.append(DocumentAnalysisFeature.LANGUAGES)
+    logger.info(f"Features enabled: {features}")
     doc_client = await _use_doc_client()
     doc_poller = await doc_client.begin_analyze_document(
         analyze_request=content,  # type: ignore
         content_type="application/octet-stream",
+        features=features,  # See: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-add-on-capabilities?view=doc-intel-4.0.0&tabs=rest-api
         model_id="prebuilt-layout",
         output_content_format=ContentFormat.MARKDOWN,
-        features=[
-            DocumentAnalysisFeature.BARCODES,
-            DocumentAnalysisFeature.FORMULAS,
-            DocumentAnalysisFeature.LANGUAGES,
-            # DocumentAnalysisFeature.OCR_HIGH_RESOLUTION,  # TODO: Enable this in the config?
-        ]  # See: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-add-on-capabilities?view=doc-intel-4.0.0&tabs=rest-api
     )
     doc_result: AnalyzeResult = await doc_poller.result()
     # Build cracked model
