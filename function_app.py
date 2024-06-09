@@ -281,7 +281,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         # Rules
         - Answer only with the synthesis, nothing else
         - Answers in English, even if the document is in another language
-        - Be exhaustive and complete
+        - Be concise
         - Outline the main points but not the details
         - Should be in a single paragraph
         - Use only the information provided in the document
@@ -426,7 +426,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
 
         # Rules
         - Answers in English, even if the document is in another language
-        - Be exhaustive and complete
+        - Be concise
         - Only use the information provided in the document
 
         # Result format as a JSON schema
