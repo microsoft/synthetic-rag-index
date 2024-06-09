@@ -622,7 +622,7 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
             context=fact.context,
             document_synthesis=facted_model.synthesis,
             file_path=facted_model.file_path,
-            id=_hash_text(f"{facted_model.file_path}-{facted_model.chunk_number + facted_model.page_number + i}"),  # Reproducible ID over the same raw document
+            id=_hash_text(f"{facted_model.file_md5}-{facted_model.chunk_number + facted_model.page_number + i}"),  # Reproducible ID over the same raw document
             question=fact.question,
         )
         for i, fact in enumerate(facted_model.facts)
