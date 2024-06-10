@@ -47,6 +47,7 @@ import re
 import pikepdf
 from io import BytesIO
 from base64 import b64encode
+from helpers.config_models.llm import ConfigModel as LlmConfigModel
 
 
 # Azure Functions
@@ -66,7 +67,7 @@ SYNTHESIS_FOLDER = "3-synthesis"
 # Clients
 _container_client: Optional[ContainerClient] = None
 _doc_client: Optional[DocumentIntelligenceClient] = None
-_openai_client: Optional[AsyncAzureOpenAI] = None
+_openai_clients: dict[str, AsyncAzureOpenAI] = {}
 _search_client: Optional[SearchClient] = None
 
 # Custom types
@@ -221,8 +222,9 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
     chuncks = _split_text(
         text=extracted_model.document_content,
         max_tokens=int(
-            CONFIG.llm.context * 0.8
+            CONFIG.llm.slow.context * 0.8
         ),  # For simplicity, we count tokens with a 20% margin
+        model=CONFIG.llm.slow.model,  # We will use the slow model next step
     )
     logger.info(f"Splited to {len(chuncks)} chuncks ({blob_name})")
     # Store
@@ -271,7 +273,9 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         del content
     # LLM does its magic
     synthesis_str = await _llm_generate_completion(
+        is_fast=False,  # We will use the slow model
         max_tokens=500,  # 500 tokens ~= 375 words
+        temperature=0,  # We want the most accurate answers
         prompt=f"""
         Assistant is an expert data analyst with 20 years of experience.
 
@@ -291,7 +295,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         - Lang: {", ".join(chuncked_model.langs) if chuncked_model.langs else "N/A"}
         - Title: {chuncked_model.title if chuncked_model.title else "N/A"}
 
-        # Response example
+        # Response format
         [synthesis]
 
         ## Example 1
@@ -357,6 +361,7 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
     pages = _split_text(
         max_tokens=int(100 / 75 * 500),  # 100 tokens ~= 75 words, ~500 words per page for a dense book
         text=synthesis_model.chunk_content,
+        model=CONFIG.llm.fast.model,  # We will use the fast model next step
     )
     logger.info(f"Splited to {len(pages)} pages ({blob_name})")
     # Store
@@ -416,42 +421,59 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # LLM does its magic
-    facted_llm_model = await _llm_generate_model(
-        model=FactedLlmModel,
-        prompt=f"""
-        Assistant is an expert data analyst with 20 years of experience.
+    facts: list[FactModel] = []
+    for _ in range(10):  # We will generate facts 10 times
+        facted_llm_model = await _llm_generate_model(
+            is_fast=True,  # We will use the fast model
+            model=FactedLlmModel,
+            temperature=1,  # We want creative answers
+            prompt=f"""
+            Assistant is an expert data analyst with 20 years of experience.
 
-        # Objective
-        Create question/answer pairs for a document. Content come from a paged document created with an OCR tool, it may contain errors, repetitions, or missing parts, do your best to understand it.
+            # Objective
+            Create new question/answer pairs for a document. Content come from a paged document created with an OCR tool, it may contain errors, repetitions, or missing parts, do your best to understand it.
 
-        # Rules
-        - Answers in English, even if the document is in another language
-        - Be concise
-        - Only use the information provided in the document
+            # Rules
+            - Answers in English, even if the document is in another language
+            - Be concise
+            - New facts must be on different points than the ones already generated
+            - Only use the information provided in the document
 
-        # Result format as a JSON schema
-        {json.dumps(FactedLlmModel.model_json_schema())}
+            # Document metadata
+            - Format: {format}
+            - Lang: {", ".join(paged_model.langs) if paged_model.langs else "N/A"}
+            - Title: {paged_model.title or "N/A"}
 
-        # Document metadata
-        - Format: {format}
-        - Lang: {", ".join(paged_model.langs) if paged_model.langs else "N/A"}
-        - Title: {paged_model.title or "N/A"}
+            # Document synthesis
+            {paged_model.synthesis}
 
-        # Document synthesis
-        {paged_model.synthesis}
+            # Document content
+            {paged_model.page_content}
 
-        # Document content
-        {paged_model.page_content}
-        """,  # TODO: Add at least 5 examples for different contexts
-    )
-    if not facted_llm_model.facts:
+            # Facts already generated
+            {FactedLlmModel(facts=facts).model_dump_json() if facts else "N/A"}
+
+            # Response format (JSON schema)
+            {json.dumps(FactedLlmModel.model_json_schema())}
+
+            ## Example 1
+            Synthesis: This document addresses the demographic challenges faced by the country. The population is aging, and the birth rate is declining. The government has implemented policies to address these issues.
+            Content: The mayor of the Parisian district of Montmartre has announced a new initiative to address the demographic issues. This is a first step for the capital.
+            Response: {FactedLlmModel(facts=[FactModel(question="What is the capital of France?", answer="Paris", context="Paris, as the capital of France, is the political, economic, and cultural center of the country.")]).model_dump_json()}
+            """,  # TODO: Add at least 5 examples for different contexts
+        )
+        if not facted_llm_model:
+            continue
+        facts += facted_llm_model.facts
+    if not facts:
         logger.info(f"No facts detected, skipping")
         return
+    logger.info(f"Generated {len(facts)} facts ({blob_name})")
     # Build model
     facted_document_model = FactedDocumentModel(
         chunk_content=paged_model.chunk_content,
         chunk_number=paged_model.chunk_number,
-        facts=facted_llm_model.facts,
+        facts=facts,
         file_md5=paged_model.file_md5,
         file_path=paged_model.file_path,
         format=paged_model.format,
@@ -522,7 +544,9 @@ async def _critic_fact_filter(
     model: FactedDocumentModel,
 ) -> Optional[FactedDocumentModel]:
     score_str = await _llm_generate_completion(
+        is_fast=False,  # We will use the slow model
         max_tokens=10,  # We only need a float score
+        temperature=0,  # We want the most accurate answers
         prompt=f"""
         Assistant is an expert data analyst with 20 years of experience.
 
@@ -548,7 +572,7 @@ async def _critic_fact_filter(
         # Page content
         {model.page_content}
 
-        # Response example
+        # Response format
         [score]
 
         ## Example 1
@@ -637,7 +661,7 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
     await search_client.merge_or_upload_documents(indexed_dicts)  # Will overwrite existing documents
 
 
-def _split_text(text: str, max_tokens: int) -> list[str]:
+def _split_text(text: str, max_tokens: int, model: str) -> list[str]:
     """
     Split a text into chunks of text with a maximum number of tokens and characters.
 
@@ -647,7 +671,7 @@ def _split_text(text: str, max_tokens: int) -> list[str]:
     first_margin = 100
     last_margin = 100
     max_chars = int(1048576 * 0.9)  # REST API has a limit of 1MB, with a 10% margin
-    token_count = _count_tokens(content=text, model=CONFIG.llm.model)
+    token_count = _count_tokens(content=text, model=model)
 
     if token_count < max_tokens:  # For simplicity, we count tokens with a 10% margin
         contents.append(text)
@@ -669,8 +693,10 @@ def _split_text(text: str, max_tokens: int) -> list[str]:
 
 
 async def _llm_generate_completion(
+    is_fast: bool,
     max_tokens: int,
     prompt: str,
+    temperature: float,
 ) -> str:
     """
     Generate a completion from a prompt using OpenAI.
@@ -678,27 +704,30 @@ async def _llm_generate_completion(
     The completion is generated using the LLM model.
     """
     logger.info("LLM completion generation")
-    openai_client = await _use_openai_client()
+    openai_client, config = await _use_openai_client(is_fast)
     llm_res = await openai_client.chat.completions.create(
         max_tokens=max_tokens,
-        model=CONFIG.llm.model,
+        model=config.model,
         messages=[
             ChatCompletionSystemMessageParam(
                 content=prompt,
                 role="system",
             ),
         ],
+        temperature=temperature,
     )
     return llm_res.choices[0].message.content  # type: ignore
 
 
 async def _llm_generate_model(
+    is_fast: bool,
     model: Type[Model],
     prompt: str,
+    temperature: float,
     _previous_result: Optional[str] = None,
     _retries_remaining: int = 3,
     _validation_error: Optional[str] = None,
-) -> Model:
+) -> Optional[Model]:
     """
     Generate a synthesis from a content using OpenAI.
 
@@ -707,7 +736,7 @@ async def _llm_generate_model(
     logger.info(
         f"LLM model generation ({_retries_remaining} retries left)"
     )
-    openai_client = await _use_openai_client()
+    openai_client, config = await _use_openai_client(is_fast)
     messages = [
         ChatCompletionSystemMessageParam(
             content=prompt,
@@ -731,8 +760,9 @@ async def _llm_generate_model(
         )
     llm_res = await openai_client.chat.completions.create(
         messages=messages,
-        model=CONFIG.llm.model,
+        model=config.model,
         response_format={"type": "json_object"},
+        temperature=temperature,
     )
     llm_content: str = llm_res.choices[0].message.content  # type: ignore
     # Parse LLM response
@@ -740,11 +770,14 @@ async def _llm_generate_model(
         model_res = model.model_validate_json(llm_content)
     except ValidationError as e:
         if _retries_remaining == 0:
-            raise e
+            logger.error(f"LLM validation error: {e}")
+            return None
         logger.warning(f"LLM validation error")
         return await _llm_generate_model(
+            is_fast=is_fast,
             model=model,
             prompt=prompt,
+            temperature=temperature,
             _previous_result=llm_content,
             _retries_remaining=_retries_remaining - 1,
             _validation_error=str(e),
@@ -1029,23 +1062,25 @@ async def _use_search_client() -> SearchClient:
     return _search_client
 
 
-async def _use_openai_client() -> AsyncAzureOpenAI:
+async def _use_openai_client(is_fast: bool) -> tuple[AsyncAzureOpenAI, LlmConfigModel]:
     """
     Create a OpenAI client capable of async I/O.
 
     The client is cached for future use.
     """
-    global _openai_client
-    if not isinstance(_openai_client, AsyncAzureOpenAI):
-        _openai_client = AsyncAzureOpenAI(
+    global _openai_clients
+    config = CONFIG.llm.fast if is_fast else CONFIG.llm.slow
+    client_name = "fast" if is_fast else "slow"
+    if not (client_name in _openai_clients and isinstance(_openai_clients[client_name], AsyncAzureOpenAI)):
+        _openai_clients[client_name] = AsyncAzureOpenAI(
             # Deployment
             api_version="2023-12-01-preview",
-            azure_deployment=CONFIG.llm.deployment,
-            azure_endpoint=CONFIG.llm.endpoint,
+            azure_deployment=config.deployment,
+            azure_endpoint=config.endpoint,
             # Reliability
             max_retries=30,  # We are patient, this is a background job :)
             timeout=180,  # 3 minutes
             # Authentication
-            api_key=CONFIG.llm.api_key.get_secret_value(),
+            api_key=config.api_key.get_secret_value(),
         )
-    return _openai_client
+    return (_openai_clients[client_name], config)
