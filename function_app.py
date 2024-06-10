@@ -98,14 +98,13 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
         await downloader.readinto(in_bytes)
     if _detect_extension(blob_name) == ".pdf":  # Sanitize PDF
         with pikepdf.open(in_bytes) as pdf:
-            target_version = "1.4"
-            logger.info(f"Sanitizing PDF from v{pdf.pdf_version} to v{target_version} ({blob_name})")
+            logger.info(f"Sanitizing PDF from v{pdf.pdf_version} to v{CONFIG.features.sanitize_pdf_version} ({blob_name})")
             out_stream = BytesIO()
             pdf.save(
                 deterministic_id=True,  # Deterministic document ID for caching
                 filename_or_stream=out_stream,
                 linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
-                min_version=target_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
+                min_version=CONFIG.features.sanitize_pdf_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
             )
             # Store
             out_path = _replace_root_path(blob_name, SANITIZE_FOLDER)
@@ -183,7 +182,7 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
         file_md5=blob_md5,
         file_path=blob_name,
         format="markdown",
-        langs={lang.locale for lang in doc_result.languages or [] if lang.confidence > 0.75},
+        langs={lang.locale for lang in doc_result.languages or [] if lang.confidence >= CONFIG.features.extract_lang_confidence_threshold},
         title=title_paragraph.content if title_paragraph else None,
     )
     # Store
@@ -366,9 +365,9 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         del content
     # Prepare chunks for LLM
     pages = _split_text(
-        max_tokens=int(100 / 75 * 500),  # 100 tokens ~= 75 words, ~500 words per page for a dense book
-        text=synthesis_model.chunk_content,
+        max_tokens=CONFIG.features.page_split_size,
         model=CONFIG.llm.fast.model,  # We will use the fast model next step
+        text=synthesis_model.chunk_content,
     )
     logger.info(f"Splited to {len(pages)} pages ({blob_name})")
     # Store
@@ -429,7 +428,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         del content
     # LLM does its magic
     facts: list[FactModel] = []
-    for _ in range(10):  # We will generate facts 10 times
+    for _ in range(CONFIG.features.fact_iterations):  # We will generate facts 10 times
         def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[FactedLlmModel]]:
             if not req:
                 return False, "Empty response", None
@@ -612,7 +611,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
     )
     kept_facts = []
     for i, fact_score in enumerate(fact_scores):
-        if fact_score >= 0.5:  # Discard low quality facts
+        if fact_score >= CONFIG.features.fact_score_threshold:  # Discard low quality facts
             kept_facts.append(facted_model.facts[i])
     facted_model.facts = kept_facts
     if not facted_model.facts:
@@ -678,8 +677,6 @@ def _split_text(text: str, max_tokens: int, model: str) -> list[str]:
     The function returns a list of text chunks.
     """
     contents = []
-    first_margin = 100
-    last_margin = 100
     max_chars = int(1048576 * 0.9)  # REST API has a limit of 1MB, with a 10% margin
     token_count = _count_tokens(content=text, model=model)
 
@@ -693,9 +690,9 @@ def _split_text(text: str, max_tokens: int, model: str) -> list[str]:
             ckuncks_count = math.ceil(token_count / max_chars)
             chunck_size = math.ceil(len(text) / ckuncks_count)
         for i in range(ckuncks_count):  # Iterate over desired chunks count
-            start = max(i * chunck_size - first_margin, 0)  # First chunk with margin
+            start = max(i * chunck_size - CONFIG.features.page_split_margin, 0)  # First chunk with margin
             end = min(
-                (i + 1) * chunck_size + last_margin, len(text)
+                (i + 1) * chunck_size + CONFIG.features.page_split_margin, len(text)
             )  # Last chunk with margin
             contents.append(text[start:end])
 
@@ -710,7 +707,7 @@ async def _llm_generate(
     temperature: float = 0,
     max_tokens: Optional[int] = None,
     _previous_result: Optional[str] = None,
-    _retries_remaining: int = 3,
+    _retries_remaining: int = CONFIG.features.llm_retry_count,
     _validation_error: Optional[str] = None,
 ) -> Optional[T]:
     """

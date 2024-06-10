@@ -294,3 +294,23 @@ Finally, run:
 # Start the local API server
 make dev
 ```
+
+## Advanced usage
+
+### Configuration
+
+Features are documented in [features.py](helpers/config_models/features.py). The features can all be overridden in `config.yaml` file:
+
+```yaml
+# config.yaml
+features:
+  extract_lang_confidence_threshold: 0.75
+  fact_iterations: 10
+  fact_score_threshold: 0.5
+  llm_retry_count: 3
+  page_split_margin: 100
+  page_split_size: 666
+  sanitize_pdf_version: 1.4
+
+[...]
+```
