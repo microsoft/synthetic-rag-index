@@ -1,6 +1,6 @@
 from pydantic import SecretStr, BaseModel
 
 
-class DocumentIntelligenceModel(BaseModel, frozen=True):
+class DocumentIntelligenceModel(BaseModel):
     access_key: SecretStr
     endpoint: str

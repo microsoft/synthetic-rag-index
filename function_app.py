@@ -24,7 +24,7 @@ from helpers.http import azure_transport
 from openai import AsyncAzureOpenAI
 from openai.types.chat import ChatCompletionSystemMessageParam
 from os import getenv
-from pydantic import TypeAdapter, ValidationError, BaseModel
+from pydantic import TypeAdapter, ValidationError
 from typing import Callable, Optional, TypeVar
 import asyncio
 import azure.functions as func
@@ -71,7 +71,6 @@ _openai_clients: dict[str, AsyncAzureOpenAI] = {}
 _search_client: Optional[SearchClient] = None
 
 # Custom types
-Model = TypeVar("Model", bound=BaseModel)
 T = TypeVar("T")
 
 
