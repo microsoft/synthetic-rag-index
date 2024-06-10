@@ -1,5 +1,6 @@
 from helpers.config_models.ai_search import AiSearchModel
 from helpers.config_models.document_intelligence import DocumentIntelligenceModel
+from helpers.config_models.features import FeaturesModel
 from helpers.config_models.llm import LlmModel
 from helpers.config_models.monitoring import MonitoringModel
 from pydantic import Field
@@ -19,6 +20,9 @@ class RootModel(BaseSettings):
     # Editable fields
     ai_search: AiSearchModel
     document_intelligence: DocumentIntelligenceModel
+    features: FeaturesModel = (
+        FeaturesModel()
+    )  # Object is fully defined by default
     llm: LlmModel
     monitoring: MonitoringModel = (
         MonitoringModel()
