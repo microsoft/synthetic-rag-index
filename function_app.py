@@ -193,7 +193,7 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
     try:
         await out_client.upload_blob(data=raw_text_model.model_dump_json())
     except ResourceExistsError:
-        logger.info(f"Document already exists, skipping ({blob_name})")
+        logger.info(f"Document already exists, skipping ({out_path})")
 
 
 @app.blob_trigger(
@@ -246,7 +246,7 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         try:
             await out_client.upload_blob(data=out_model.model_dump_json())
         except ResourceExistsError:
-            logger.info(f"Chunck already exists, skipping ({blob_name})")
+            logger.info(f"Chunck already exists, skipping ({out_path})")
 
 
 @app.blob_trigger(
@@ -337,7 +337,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
     try:
         await out_client.upload_blob(data=synthesis_model.model_dump_json())
     except ResourceExistsError:
-        logger.info(f"Synthesis already exists, skipping ({blob_name})")
+        logger.info(f"Synthesis already exists, skipping ({out_path})")
 
 
 @app.blob_trigger(
@@ -377,14 +377,14 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         # First, clean
         page = _clean_page(page)
         if not page:
-            logger.info(f"Page skipped ({blob_name})")
+            logger.warning(f"Page skipped ({blob_name})")
             continue
         # Second, filter-out pages with excessive repetition
         if _is_repetition_removal(
             text=page,
             threshold_ratio=1.5,  # We are less strict than the paper because this is all normally internal data and we are not training a model
         ):
-            logger.info(f"Repetition detected, skipping ({blob_name})")
+            logger.warning(f"Repetition detected, skipping ({blob_name})")
             continue
         out_model = PagedDocumentModel(
             chunk_content=synthesis_model.chunk_content,
@@ -405,7 +405,7 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         try:
             await out_client.upload_blob(data=out_model.model_dump_json())
         except ResourceExistsError:
-            logger.info(f"Page already exists, skipping ({blob_name})")
+            logger.info(f"Page already exists, skipping ({out_path})")
 
 
 @app.blob_trigger(
@@ -508,7 +508,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
     try:
         await out_client.upload_blob(data=facted_document_model.model_dump_json())
     except ResourceExistsError:
-        logger.info(f"Fact already exists, skipping ({blob_name})")
+        logger.info(f"Fact already exists, skipping ({out_path})")
 
 
 @app.blob_trigger(
