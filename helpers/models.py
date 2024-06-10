@@ -52,7 +52,7 @@ class FactModel(BaseModel):
     )
 
 
-class FactedLlmModel(SynthetisedDocumentModel):
+class FactedLlmModel(BaseModel):
     # Editable fields
     facts: list[FactModel]
 
