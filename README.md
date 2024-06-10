@@ -229,11 +229,18 @@ Place a file called `config.yaml` in the root of the project with the following 
 ```yaml
 # config.yaml
 llm:
-  api_key: xxx
-  context: 128000
-  deployment: gpt-4o-2024-05-13
-  endpoint: https://xxx.openai.azure.com
-  model: gpt-4o
+  fast:
+    api_key: xxx
+    context: 16385
+    deployment: gpt-35-turbo-0125
+    endpoint: https://xxx.openai.azure.com
+    model: gpt-35-turbo
+  slow:
+    api_key: xxx
+    context: 128000
+    deployment: gpt-4o-2024-05-13
+    endpoint: https://xxx.openai.azure.com
+    model: gpt-4o
 
 ai_search:
   access_key: xxx
