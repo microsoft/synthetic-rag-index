@@ -25,7 +25,7 @@ from openai import AsyncAzureOpenAI
 from openai.types.chat import ChatCompletionSystemMessageParam
 from os import getenv
 from pydantic import TypeAdapter, ValidationError, BaseModel
-from typing import Optional, Type, TypeVar
+from typing import Callable, Optional, TypeVar
 import asyncio
 import azure.functions as func
 import hashlib
@@ -72,6 +72,7 @@ _search_client: Optional[SearchClient] = None
 
 # Custom types
 Model = TypeVar("Model", bound=BaseModel)
+T = TypeVar("T")
 
 
 @app.blob_trigger(
@@ -272,10 +273,18 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # LLM does its magic
-    synthesis_str = await _llm_generate_completion(
-        is_fast=False,  # We will use the slow model
+    def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[str]]:
+        if not req:
+            return False, "Empty response", None
+        req = req.strip()
+        if len(req) < 10:  # Arbitrary minimum length
+            return False, "Response too short", None
+        return True, None, req
+    synthesis_str = await _llm_generate(
+        is_fast=False,  # We want high quality summaries because they are used to avoid hallucinations in the next steps
         max_tokens=500,  # 500 tokens ~= 375 words
-        temperature=0,  # We want the most accurate answers
+        res_object=str,
+        validation_callback=_validate,
         prompt=f"""
         Assistant is an expert data analyst with 20 years of experience.
 
@@ -287,7 +296,6 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         - Answers in English, even if the document is in another language
         - Be concise
         - Outline the main points but not the details
-        - Should be in a single paragraph
         - Use only the information provided in the document
 
         # Document metadata
@@ -296,7 +304,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         - Title: {chuncked_model.title if chuncked_model.title else "N/A"}
 
         # Response format
-        [synthesis]
+        [synthesis, single paragraph]
 
         ## Example 1
         Content: Regulatory context. Scientific publications are unequivocal about the urgent challenges posed by climate change and the need for a transition to a climate-neutral economy. The International Energy Agency (IEA) asserts, in its Net Zero Emissions (NZE) scenario, that achieving carbon neutrality by 2050 and limiting warming to 1.5℃ by the end of the century requires an immediate end to all new fossil fuel exploration projects.
@@ -423,10 +431,19 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
     # LLM does its magic
     facts: list[FactModel] = []
     for _ in range(10):  # We will generate facts 10 times
-        facted_llm_model = await _llm_generate_model(
+        def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[FactedLlmModel]]:
+            if not req:
+                return False, "Empty response", None
+            req = req.strip().strip("```json\n").strip("\n```").strip()
+            try:
+                return True, None, FactedLlmModel.model_validate_json(req)
+            except ValidationError as e:
+                return False, str(e), None
+        facted_llm_model = await _llm_generate(
             is_fast=True,  # We will use the fast model
-            model=FactedLlmModel,
+            res_object=FactedLlmModel,
             temperature=1,  # We want creative answers
+            validation_callback=_validate,
             prompt=f"""
             Assistant is an expert data analyst with 20 years of experience.
 
@@ -516,16 +533,89 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         del content
     # Filter facts
     initial_fact_count = len(facted_model.facts)
-    facts = await asyncio.gather(
+    def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[float]]:
+        if not req:
+            return False, "Empty response", None
+        req = req.strip()
+        try:
+            return True, None, float(req)
+        except ValueError:
+            group = re.search(r"\d+\.\d+", req)
+            if group:
+                return True, None, float(group.group())
+            return False, "Score not detected", None
+    fact_scores = await asyncio.gather(
         *[
-            _critic_fact_filter(
-                fact=fact,
-                model=facted_model,
+            _llm_generate(
+                is_fast=False,  # We want high quality to avoid using human validation which is even more costly and slower
+                max_tokens=10,  # We only need a float score
+                res_object=float,
+                validation_callback=_validate,
+                prompt=f"""
+                Assistant is an expert data analyst with 20 years of experience.
+
+                # Objective
+                Evaluate the quality of a fact. The fact is a question/answer pair created from a paged document.
+
+                # Rules
+                - Answer only with the score, nothing else
+                - High scores indicate that the fact is likely to be correct and relevant
+                - Low scores indicate that the fact is likely to be incorrect or irrelevant
+                - Only use the information provided in the document
+                - The score should reflect the quality of the fact based on the document synthesis, page content, and context
+
+                # Document metadata
+                - Format: {format}
+                - Lang: {", ".join(facted_model.langs) if facted_model.langs else "N/A"}
+                - Title: {facted_model.title or "N/A"}
+
+                # Document synthesis
+                {facted_model.synthesis}
+
+                # Page content
+                {facted_model.page_content}
+
+                # Response format
+                [score, a float between 0.0 and 1.0]
+
+                ## Example 1
+                Question: What is the capital of France?
+                Answer: Paris
+                Context: Paris, as the capital of France, is the political, economic, and cultural center of the country.
+                Score: 1.0
+
+                ## Example 2
+                Question: What is the ISIN code for the stock?
+                Answer: US0378331005
+                Context: The ISIN code for the stock is FR0000120172.
+                Score: 0.0
+
+                ## Example 3
+                Question: In which year was the company founded?
+                Answer: 1939
+                Context: The company, by its founder, was established during World War II to provide essential services to the population. Its exact founding date is unknown.
+                Score: 0.6
+
+                ## Example 4
+                Question: What is the main product of the company?
+                Answer: A software suite
+                Context: The company is known for its software suite called "Office", which includes applications such as a text editor, a spreadsheet, and a presentation program.
+                Score: 0.8
+
+                # Fact
+                Question: {fact.question}
+                Answer: {fact.answer}
+                Context: {fact.context}
+                """,   # TODO: Add at least 5 examples for different contexts
             )
             for fact in facted_model.facts
         ]
     )
-    facted_model.facts = [fact for fact in facts if fact]
+    kept_facts = []
+    for i, fact_score in enumerate(fact_scores):
+        if fact_score >= 0.5:  # Discard low quality facts
+            kept_facts.append(facted_model.facts[i])
+    facted_model.facts = kept_facts
     if not facted_model.facts:
         logger.info(f"No facts left, skipping")
         return
@@ -538,88 +628,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
     try:
         await out_client.upload_blob(data=facted_model.model_dump_json())
     except ResourceExistsError:
-        logger.info(f"Critic already exists, skipping ({blob_name})")
-
-
-async def _critic_fact_filter(
-    fact: FactModel,
-    model: FactedDocumentModel,
-) -> Optional[FactedDocumentModel]:
-    score_str = await _llm_generate_completion(
-        is_fast=False,  # We will use the slow model
-        max_tokens=10,  # We only need a float score
-        temperature=0,  # We want the most accurate answers
-        prompt=f"""
-        Assistant is an expert data analyst with 20 years of experience.
-
-        # Objective
-        Evaluate the quality of a fact. The fact is a question/answer pair created from a paged document.
-
-        # Rules
-        - Answer only with the score, nothing else
-        - High scores indicate that the fact is likely to be correct and relevant
-        - Low scores indicate that the fact is likely to be incorrect or irrelevant
-        - Only use the information provided in the document
-        - The score should be between 0.0 and 1.0
-        - The score should reflect the quality of the fact based on the document synthesis, page content, and context
-
-        # Document metadata
-        - Format: {format}
-        - Lang: {", ".join(model.langs) if model.langs else "N/A"}
-        - Title: {model.title or "N/A"}
-
-        # Document synthesis
-        {model.synthesis}
-
-        # Page content
-        {model.page_content}
-
-        # Response format
-        [score]
-
-        ## Example 1
-        Question: What is the capital of France?
-        Answer: Paris
-        Context: Paris, as the capital of France, is the political, economic, and cultural center of the country.
-        Score: 1.0
-
-        ## Example 2
-        Question: What is the ISIN code for the stock?
-        Answer: US0378331005
-        Context: The ISIN code for the stock is FR0000120172.
-        Score: 0.0
-
-        ## Example 3
-        Question: In which year was the company founded?
-        Answer: 1939
-        Context: The company, by its founder, was established during World War II to provide essential services to the population. Its exact founding date is unknown.
-        Score: 0.6
-
-        ## Example 4
-        Question: What is the main product of the company?
-        Answer: A software suite
-        Context: The company is known for its software suite called "Office", which includes applications such as a text editor, a spreadsheet, and a presentation program.
-        Score: 0.8
-
-
-        # Fact
-        Question: {fact.question}
-        Answer: {fact.answer}
-        Context: {fact.context}
-        """,   # TODO: Add at least 5 examples for different contexts
-    )
-    try:
-        score = float(score_str)  # LLM should return a float
-    except ValueError:
-        score = float(re.search(r"\d+\.\d+", score_str).group())  # As a fallback, we try to extract the score from the string
-    if score < 0.5:
-        logger.info(f"Low score detected ({score:.2f}), skipping")
-        logger.info(f"Question: {fact.question}")
-        logger.info(f"Answer: {fact.answer}")
-        logger.info(f"Context: {fact.context}")
-        logger.info(f"Score: {score:.2f}")
-        return
-    return fact
+        logger.info(f"Critic already exists, skipping ({out_path})")
 
 
 @app.blob_trigger(
@@ -694,50 +703,24 @@ def _split_text(text: str, max_tokens: int, model: str) -> list[str]:
     return contents
 
 
-async def _llm_generate_completion(
+async def _llm_generate(
     is_fast: bool,
-    max_tokens: int,
     prompt: str,
-    temperature: float,
-) -> str:
+    res_object: type[T],
+    validation_callback: Callable[[Optional[str]], tuple[bool, Optional[str], Optional[T]]],
+    temperature: float = 0,
+    max_tokens: Optional[int] = None,
+    _previous_result: Optional[str] = None,
+    _retries_remaining: int = 3,
+    _validation_error: Optional[str] = None,
+) -> Optional[T]:
     """
     Generate a completion from a prompt using OpenAI.
 
     The completion is generated using the LLM model.
     """
     logger.info("LLM completion generation")
-    openai_client, config = await _use_openai_client(is_fast)
-    llm_res = await openai_client.chat.completions.create(
-        max_tokens=max_tokens,
-        model=config.model,
-        messages=[
-            ChatCompletionSystemMessageParam(
-                content=prompt,
-                role="system",
-            ),
-        ],
-        temperature=temperature,
-    )
-    return llm_res.choices[0].message.content  # type: ignore
-
-
-async def _llm_generate_model(
-    is_fast: bool,
-    model: Type[Model],
-    prompt: str,
-    temperature: float,
-    _previous_result: Optional[str] = None,
-    _retries_remaining: int = 3,
-    _validation_error: Optional[str] = None,
-) -> Optional[Model]:
-    """
-    Generate a synthesis from a content using OpenAI.
-
-    The synthesis is generated using the LLM model. Then, the synthesis is stored in the FACT folder.
-    """
-    logger.info(
-        f"LLM model generation ({_retries_remaining} retries left)"
-    )
+    # Generate
     openai_client, config = await _use_openai_client(is_fast)
     messages = [
         ChatCompletionSystemMessageParam(
@@ -753,7 +736,7 @@ async def _llm_generate_model(
                 A validation error occurred during the previous attempt.
 
                 # Previous result
-                {_previous_result}
+                {_previous_result or "N/A"}
 
                 # Error details
                 {_validation_error}
@@ -761,30 +744,31 @@ async def _llm_generate_model(
             )
         )
     llm_res = await openai_client.chat.completions.create(
+        max_tokens=max_tokens,
         messages=messages,
         model=config.model,
-        response_format={"type": "json_object"},
         temperature=temperature,
     )
-    llm_content: str = llm_res.choices[0].message.content  # type: ignore
-    # Parse LLM response
-    try:
-        model_res = model.model_validate_json(llm_content)
-    except ValidationError as e:
+    llm_str = llm_res.choices[0].message.content  # type: ignore
+    # Validate
+    is_valid, validation_error, res_object = validation_callback(llm_str)
+    if not is_valid:
         if _retries_remaining == 0:
-            logger.error(f"LLM validation error: {e}")
+            logger.error(f"LLM validation error: {validation_error}")
             return None
-        logger.warning(f"LLM validation error")
-        return await _llm_generate_model(
+        logger.warning(f"LLM validation error, retrying ({_retries_remaining} retries left)")
+        return await _llm_generate(
             is_fast=is_fast,
-            model=model,
+            max_tokens=max_tokens,
             prompt=prompt,
+            res_object=res_object,
             temperature=temperature,
-            _previous_result=llm_content,
+            validation_callback=validation_callback,
+            _previous_result=llm_str,
             _retries_remaining=_retries_remaining - 1,
-            _validation_error=str(e),
+            _validation_error=validation_error,
         )
-    return model_res
+    return res_object
 
 
 def _clean_page(
