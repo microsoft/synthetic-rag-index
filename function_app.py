@@ -515,6 +515,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # Filter facts
+    initial_fact_count = len(facted_model.facts)
     facts = await asyncio.gather(
         *[
             _critic_fact_filter(
@@ -528,6 +529,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
     if not facted_model.facts:
         logger.info(f"No facts left, skipping")
         return
+    logger.info(f"Filtered to {len(facted_model.facts)}/{initial_fact_count} facts ({blob_name})")
     # Store
     out_path = _replace_root_path(
         _replace_extension(blob_name, ".json"), CRITIC_FOLDER
