@@ -214,11 +214,11 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing extracted blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        chunck = await downloader.readall()
+        content = await downloader.readall()
         # Deserialize
-        extracted_model = ExtractedDocumentModel.model_validate_json(chunck)
+        extracted_model = ExtractedDocumentModel.model_validate_json(content)
         # Free up memory
-        del chunck
+        del content
     # Prepare chunks for LLM
     chuncks = _split_text(
         text=extracted_model.document_content,
@@ -360,11 +360,11 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing synthesis blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        page = await downloader.readall()
+        content = await downloader.readall()
         # Deserialize
-        synthesis_model = SynthetisedDocumentModel.model_validate_json(page)
+        synthesis_model = SynthetisedDocumentModel.model_validate_json(content)
         # Free up memory
-        del page
+        del content
     # Prepare chunks for LLM
     pages = _split_text(
         max_tokens=int(100 / 75 * 500),  # 100 tokens ~= 75 words, ~500 words per page for a dense book
