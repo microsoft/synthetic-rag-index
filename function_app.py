@@ -365,14 +365,14 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         page = _clean_page(page)
         if not page:
             logger.info(f"Page skipped ({blob_name})")
-            return
+            continue
         # Second, filter-out pages with excessive repetition
         if _is_repetition_removal(
             text=page,
             threshold_ratio=1.5,  # We are less strict than the paper because this is all normally internal data and we are not training a model
         ):
             logger.info(f"Repetition detected, skipping ({blob_name})")
-            return
+            continue
         out_model = PagedDocumentModel(
             chunk_content=synthesis_model.chunk_content,
             chunk_number=synthesis_model.chunk_number,
