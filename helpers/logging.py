@@ -21,11 +21,10 @@ configure_azure_monitor(
 )  # Configure Azure Application Insights exporter
 AioHttpClientInstrumentor().instrument()  # Instrument aiohttp
 HTTPXClientInstrumentor().instrument()  # Instrument httpx
-# Instrument OpenAI
 environ["TRACELOOP_TRACE_CONTENT"] = str(
     True
 )  # Instrumentation logs prompts, completions, and embeddings to span attributes, set to False to lower monitoring costs or to avoid logging PII
-OpenAIInstrumentor().instrument()
+OpenAIInstrumentor().instrument()  # Instrument OpenAI
 tracer = trace.get_tracer(
     instrumenting_module_name=f"com.github.clemlesne.{APP_NAME}",
 )  # Create a tracer that will be used in the app
