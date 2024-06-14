@@ -17,7 +17,6 @@ from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobProperties
 from azure.storage.blob.aio import BlobClient, ContainerClient
 from azurefunctions.extensions.bindings.blob import BlobClient as BlobClientTrigger
-from helpers.http import azure_transport
 from openai.types.chat import ChatCompletionSystemMessageParam
 from os import getenv
 from pydantic import TypeAdapter, ValidationError
