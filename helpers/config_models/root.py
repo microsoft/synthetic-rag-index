@@ -1,4 +1,4 @@
-from helpers.config_models.ai_search import AiSearchModel
+from helpers.config_models.destination import DestinationModel
 from helpers.config_models.document_intelligence import DocumentIntelligenceModel
 from helpers.config_models.features import FeaturesModel
 from helpers.config_models.llm import LlmModel
@@ -18,7 +18,7 @@ class RootModel(BaseSettings):
     # Immutable fields
     version: str = Field(default="0.0.0-unknown", frozen=True)
     # Editable fields
-    ai_search: AiSearchModel
+    destination: DestinationModel
     document_intelligence: DocumentIntelligenceModel
     features: FeaturesModel = (
         FeaturesModel()

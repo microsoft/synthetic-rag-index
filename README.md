@@ -242,10 +242,12 @@ llm:
     endpoint: https://xxx.openai.azure.com
     model: gpt-4o
 
-ai_search:
-  access_key: xxx
-  endpoint: https://xxx.search.windows.net
-  index: trainings
+destination:
+  mode: ai_search
+  ai_search:
+    access_key: xxx
+    endpoint: https://xxx.search.windows.net
+    index: trainings
 
 document_intelligence:
   access_key: xxx
