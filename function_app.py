@@ -43,6 +43,7 @@ from io import BytesIO
 from unidecode import unidecode
 import pikepdf
 import re
+from helpers.config_models.destination import ModeEnum as DestinationModeEnum
 
 
 # Azure Functions
@@ -661,8 +662,10 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
     indexed_dicts = TypeAdapter(list[IndexedDocumentModel]).dump_python(
         indexed_models, mode="json"
     )
-    search_client = await CONFIG.ai_search.instance()
-    await search_client.merge_or_upload_documents(indexed_dicts)  # Will overwrite existing documents
+    if CONFIG.destination.mode == DestinationModeEnum.AI_SEARCH:
+        logger.info(f"Indexing to AI Search")
+        search_client = await CONFIG.destination.ai_search.instance()
+        await search_client.merge_or_upload_documents(indexed_dicts)  # Will overwrite existing documents
 
 
 def _split_text(text: str, max_tokens: int, model: str) -> list[str]:

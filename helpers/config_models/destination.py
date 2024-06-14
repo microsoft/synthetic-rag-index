@@ -1,7 +1,6 @@
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents.aio import SearchClient
 from enum import Enum
-from functools import cache
 from helpers.http import azure_transport
 from pydantic import SecretStr, BaseModel, ValidationInfo, field_validator
 from typing import Optional
