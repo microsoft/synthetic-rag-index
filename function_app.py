@@ -41,6 +41,7 @@ from helpers.models import (
 )
 from base64 import b64encode
 from io import BytesIO
+from unidecode import unidecode
 import pikepdf
 import re
 
@@ -78,6 +79,14 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
 
     For PDF, QPDF (https://github.com/qpdf/qpdf) is used (from pikepdf) to save the document in a safe format.
     """
+    async def _upload(data: memoryview, path: str) -> None:
+        out_path = unidecode(_replace_root_path(path, SANITIZE_FOLDER), replace_str="")  # Decode possible non ASCII characters
+        out_client = await _use_blob_client(out_path)
+        await out_client.upload_blob(
+            data=data,
+            overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
+        )
+
     # Read
     async with await _use_blob_client(
         name=input.blob_name,  # type: ignore
@@ -98,20 +107,15 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
                 linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
                 min_version=CONFIG.features.sanitize_pdf_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
             )
-            # Store
-            out_path = _replace_root_path(blob_name, SANITIZE_FOLDER)
-            out_client = await _use_blob_client(out_path)
-            await out_client.upload_blob(
+            await _upload(
                 data=out_stream.getbuffer(),
-                overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
+                path=blob_name,
             )
     else:  # Store as is
         logger.info(f"Storing raw blob as is ({blob_name})")
-        out_path = _replace_root_path(blob_name, SANITIZE_FOLDER)
-        out_client = await _use_blob_client(out_path)
-        await out_client.upload_blob(
-            data=in_bytes.getbuffer(),
-            overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
+        await _upload(
+            data=out_stream.getbuffer(),
+            path=blob_name,
         )
 
 
