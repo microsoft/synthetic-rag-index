@@ -1,21 +1,19 @@
 from enum import Enum
 from functools import cache
+from typing import Optional, Union
 from persistence.illm import ILlm
-from pydantic import Field, SecretStr, BaseModel
+from pydantic import Field, SecretStr, BaseModel, field_validator, ValidationInfo
 
 
-class TypeEnum(Enum):
-    FAST = "fast"
-    SLOW = "slow"
+class ModeEnum(str, Enum):
+    AZURE_OPENAI = "azure_openai"
+    OPENAI = "openai"
 
 
-class BackendModel(BaseModel, frozen=True):
-    api_key: SecretStr
+class AbstractPlatformModel(BaseModel, frozen=True):
     context: int
-    deployment: str
-    endpoint: str
     model: str
-    type: TypeEnum
+    streaming: bool
     validation_retry_max: int = Field(
         default=3,
         ge=0,
@@ -25,26 +23,69 @@ class BackendModel(BaseModel, frozen=True):
         ge=0,
     )
 
+
+class AzureOpenaiPlatformModel(AbstractPlatformModel, frozen=True):
+    api_key: Optional[SecretStr] = None
+    deployment: str
+    endpoint: str
+
     @cache
     def instance(self) -> ILlm:
-        from persistence.azure_openai import AzureOpenaiLlm
+        from persistence.openai import AzureOpenaiLlm
 
         return AzureOpenaiLlm(self)
 
 
-class FastModel(BackendModel):
-    type: TypeEnum = TypeEnum.FAST
+class OpenaiPlatformModel(AbstractPlatformModel, frozen=True):
+    api_key: SecretStr
+    endpoint: str
+
+    @cache
+    def instance(self) -> ILlm:
+        from persistence.openai import OpenaiLlm
+
+        return OpenaiLlm(self)
 
 
-class SlowModel(BackendModel):
-    type: TypeEnum = TypeEnum.SLOW
+class SelectedPlatformModel(BaseModel):
+    azure_openai: Optional[AzureOpenaiPlatformModel] = None
+    mode: ModeEnum
+    openai: Optional[OpenaiPlatformModel] = None
+
+    @field_validator("azure_openai")
+    def _validate_azure_openai(
+        cls,
+        azure_openai: Optional[AzureOpenaiPlatformModel],
+        info: ValidationInfo,
+    ) -> Optional[AzureOpenaiPlatformModel]:
+        if not azure_openai and info.data.get("mode", None) == ModeEnum.AZURE_OPENAI:
+            raise ValueError("Azure OpenAI config required")
+        return azure_openai
+
+    @field_validator("openai")
+    def _validate_openai(
+        cls,
+        openai: Optional[OpenaiPlatformModel],
+        info: ValidationInfo,
+    ) -> Optional[OpenaiPlatformModel]:
+        if not openai and info.data.get("mode", None) == ModeEnum.OPENAI:
+            raise ValueError("OpenAI config required")
+        return openai
+
+    def selected(self) -> Union[AzureOpenaiPlatformModel, OpenaiPlatformModel]:
+        platform = (
+            self.azure_openai if self.mode == ModeEnum.AZURE_OPENAI else self.openai
+        )
+        assert platform
+        return platform
 
 
 class LlmModel(BaseModel):
-    fast: FastModel
-    slow: SlowModel
+    fast: SelectedPlatformModel
+    slow: SelectedPlatformModel
 
-    def instance(self, is_fast: bool) -> ILlm:
-        if is_fast:
-            return self.fast.instance()
-        return self.slow.instance()
+    def selected(
+        self, is_fast: bool
+    ) -> Union[AzureOpenaiPlatformModel, OpenaiPlatformModel]:
+        platform = self.fast if is_fast else self.slow
+        return platform.selected()
