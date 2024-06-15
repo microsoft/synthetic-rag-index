@@ -11,5 +11,11 @@
       "Function": "Information",
       "Host.Results": "Warning"
     }
+  },
+  "extensions": {
+    "blobs": {
+      "maxDegreeOfParallelism": 32,
+      "poisonBlobThreshold": 5
+    }
   }
 }

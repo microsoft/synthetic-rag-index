@@ -13,6 +13,7 @@ from azure.ai.documentintelligence.models import (
     ParagraphRole,
 )
 import math
+import html
 
 
 class DocumentIntelligenceAnalyze(IAnalyze):
@@ -62,8 +63,8 @@ class DocumentIntelligenceAnalyze(IAnalyze):
                     None,  # Third, nothing
                 ),
             )
-            content = res.content
-            title = title_paragraph.content if title_paragraph else None
+            content = html.unescape(res.content)
+            title = html.unescape(title_paragraph.content) if title_paragraph else None
             langs = {lang.locale for lang in res.languages or [] if lang.confidence >= self._config.extract_lang_threshold}
 
         # Return title, content and langs
