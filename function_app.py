@@ -212,6 +212,7 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         out_path = replace_root_path(
             replace_extension(blob_name, f"-{i}.json"), CHUNCK_FOLDER
         )
+        logger.info(f"Saving chunck {i + 1}/{len(chuncks)} ({out_path})")
         out_client = await _use_blob_client(out_path)
         try:
             await out_client.upload_blob(data=out_model.model_dump_json())
@@ -370,6 +371,7 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         out_path = replace_root_path(
             replace_extension(blob_name, f"-{i}.json"), PAGE_FOLDER
         )
+        logger.info(f"Saving page {i + 1}/{len(pages)} ({out_path})")
         out_client = await _use_blob_client(out_path)
         try:
             await out_client.upload_blob(data=out_model.model_dump_json())
