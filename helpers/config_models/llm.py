@@ -1,7 +1,7 @@
 from enum import Enum
-from openai import AsyncAzureOpenAI
-from pydantic import SecretStr, BaseModel
-from typing import Optional
+from functools import cache
+from persistence.illm import ILlm
+from pydantic import Field, SecretStr, BaseModel
 
 
 class TypeEnum(Enum):
@@ -9,39 +9,42 @@ class TypeEnum(Enum):
     SLOW = "slow"
 
 
-class ConfigModel(BaseModel, frozen=True):
-    _client: Optional[AsyncAzureOpenAI] = None
+class BackendModel(BaseModel, frozen=True):
     api_key: SecretStr
     context: int
     deployment: str
     endpoint: str
     model: str
     type: TypeEnum
+    validation_retry_max: int = Field(
+        default=3,
+        ge=0,
+    )
+    page_split_margin: int = Field(
+        default=100,
+        ge=0,
+    )
 
-    async def instance(self) -> tuple[AsyncAzureOpenAI, "ConfigModel"]:
-        if not self._client:
-            self._client = AsyncAzureOpenAI(
-                # Deployment
-                api_version="2023-12-01-preview",
-                azure_deployment=self.deployment,
-                azure_endpoint=self.endpoint,
-                # Reliability
-                max_retries=30,  # We are patient, this is a background job :)
-                timeout=180,  # 3 minutes
-                # Authentication
-                api_key=self.api_key.get_secret_value(),
-            )
-        return self._client, self
+    @cache
+    def instance(self) -> ILlm:
+        from persistence.azure_openai import AzureOpenaiLlm
+
+        return AzureOpenaiLlm(self)
 
 
-class FastModel(ConfigModel):
+class FastModel(BackendModel):
     type: TypeEnum = TypeEnum.FAST
 
 
-class SlowModel(ConfigModel):
+class SlowModel(BackendModel):
     type: TypeEnum = TypeEnum.SLOW
 
 
 class LlmModel(BaseModel):
     fast: FastModel
     slow: SlowModel
+
+    def instance(self, is_fast: bool) -> ILlm:
+        if is_fast:
+            return self.fast.instance()
+        return self.slow.instance()

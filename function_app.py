@@ -1,33 +1,22 @@
 # First imports, to make sure the following logs are first
 from helpers.config import CONFIG
-from helpers.logging import logger, APP_NAME, trace
+from helpers.logging import logger, APP_NAME
 
 
 logger.info(f"{APP_NAME} v{CONFIG.version}")
 
 
 # General imports
-from azure.ai.documentintelligence.models import (
-    AnalyzeResult,
-    ContentFormat,
-    DocumentAnalysisFeature,
-    ParagraphRole,
-)
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobProperties
 from azure.storage.blob.aio import BlobClient, ContainerClient
 from azurefunctions.extensions.bindings.blob import BlobClient as BlobClientTrigger
-from openai.types.chat import ChatCompletionSystemMessageParam
 from os import getenv
-from pydantic import TypeAdapter, ValidationError
-from typing import Callable, Optional, TypeVar
+from pydantic import ValidationError
+from typing import Optional, TypeVar
 import asyncio
 import azure.functions as func
-import hashlib
 import json
-import math
-import nltk
-import tiktoken
 from helpers.models import (
     ChunkedDocumentModel,
     ExtractedDocumentModel,
@@ -43,7 +32,8 @@ from io import BytesIO
 from unidecode import unidecode
 import pikepdf
 import re
-from helpers.config_models.destination import ModeEnum as DestinationModeEnum
+from helpers.file import detect_extension, replace_root_path, replace_extension, hash_text, sanitize_text, has_excessive_repetition
+import math
 
 
 # Azure Functions
@@ -62,6 +52,7 @@ SYNTHESIS_FOLDER = "3-synthesis"
 
 # Clients
 _container_client: Optional[ContainerClient] = None
+pikepdf.settings.set_flate_compression_level(9)  # Maximum compression level for PDFs
 
 # Custom types
 T = TypeVar("T")
@@ -79,8 +70,8 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
 
     For PDF, QPDF (https://github.com/qpdf/qpdf) is used (from pikepdf) to save the document in a safe format.
     """
-    async def _upload(data: memoryview, path: str) -> None:
-        out_path = unidecode(_replace_root_path(path, SANITIZE_FOLDER), replace_str="")  # Decode possible non ASCII characters
+    async def _upload(data: memoryview, in_path: str) -> None:
+        out_path = unidecode(replace_root_path(in_path, SANITIZE_FOLDER), replace_str="")  # Decode possible non ASCII characters
         out_client = await _use_blob_client(out_path)
         await out_client.upload_blob(
             data=data,
@@ -97,25 +88,35 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
         downloader = await blob_client.download_blob()
         in_bytes = BytesIO()
         await downloader.readinto(in_bytes)
-    if _detect_extension(blob_name) == ".pdf":  # Sanitize PDF
-        with pikepdf.open(in_bytes) as pdf:
-            logger.info(f"Sanitizing PDF from v{pdf.pdf_version} to v{CONFIG.features.sanitize_pdf_version} ({blob_name})")
-            out_stream = BytesIO()
-            pdf.save(
-                deterministic_id=True,  # Deterministic document ID for caching
-                filename_or_stream=out_stream,
-                linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
-                min_version=CONFIG.features.sanitize_pdf_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
-            )
-            await _upload(
-                data=out_stream.getbuffer(),
-                path=blob_name,
-            )
+    if detect_extension(blob_name) == ".pdf":  # Sanitize PDF
+        with pikepdf.open(in_bytes) as in_pdf:
+            logger.info(f"Sanitizing PDF from v{in_pdf.pdf_version} to v{CONFIG.features.sanitize_pdf_version} ({blob_name})")
+            doc_client = CONFIG.document_intelligence.instance()
+            for pages_numbers, i, files_count in doc_client.chunck(in_pdf.pages):
+                out_stream = BytesIO()
+                out_pdf = pikepdf.Pdf.new()
+                for pages_number in pages_numbers:  # Copy pages
+                    out_pdf.pages.append(in_pdf.pages[pages_number])
+                out_path = replace_extension(blob_name, f"-{i}.pdf")
+                logger.info(f"Saving PDF file {i + 1}/{files_count} ({out_path})")
+                # See: https://qpdf.readthedocs.io/en/stable/cli.html
+                out_pdf.save(
+                    deterministic_id=True,  # Deterministic document ID for caching
+                    filename_or_stream=out_stream,
+                    linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
+                    min_version=CONFIG.features.sanitize_pdf_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
+                    object_stream_mode=pikepdf.ObjectStreamMode.generate,  # Generate object streams
+                    recompress_flate=True,  # Recompress with flate compression
+                )
+                await _upload(
+                    data=out_stream.getbuffer(),
+                    in_path=out_path,
+                )
     else:  # Store as is
-        logger.info(f"Storing raw blob as is ({blob_name})")
+        logger.info(f"Saving raw blob as is ({blob_name})")
         await _upload(
             data=out_stream.getbuffer(),
-            path=blob_name,
+            in_path=blob_name,
         )
 
 
@@ -141,45 +142,23 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
         downloader = await blob_client.download_blob()
         content = await downloader.readall()  # TODO: Use stream (files can be large)
     # Analyze document
-    logger.info(f"Analyzing document ({blob_name})")
-    features: list[DocumentAnalysisFeature] = []
-    if _detect_extension(blob_name) in [".pdf", ".jpeg", ".jpg", ".png", ".bmp", ".tiff", ".heif", ".heic"]:
-        features.append(DocumentAnalysisFeature.BARCODES)
-        features.append(DocumentAnalysisFeature.FORMULAS)
-        features.append(DocumentAnalysisFeature.LANGUAGES)
-    logger.info(f"Features enabled: {features}")
-    doc_client = await CONFIG.document_intelligence.instance()
-    doc_poller = await doc_client.begin_analyze_document(
-        analyze_request=content,  # type: ignore
-        content_type="application/octet-stream",
-        features=features,  # See: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-add-on-capabilities?view=doc-intel-4.0.0&tabs=rest-api
-        model_id="prebuilt-layout",
-        output_content_format=ContentFormat.MARKDOWN,
+    doc_client = CONFIG.document_intelligence.instance()
+    content, title, langs = await doc_client.analyze(
+        document=content,
+        file_name=blob_name,
     )
-    doc_result: AnalyzeResult = await doc_poller.result()
-    # Build cracked model
-    title_paragraph = next(
-        (
-            paragraph
-            for paragraph in doc_result.paragraphs or []
-            if paragraph.role == ParagraphRole.TITLE
-        ),  # First, title
-        next(
-            (
-                paragraph
-                for paragraph in doc_result.paragraphs or []
-                if paragraph.role == ParagraphRole.SECTION_HEADING
-            ),  # Second, section heading
-            None,  # Third, nothing
-        ),
-    )
+    # Clean content
+    content = sanitize_text(content)
+    if not content:
+        logger.warning(f"Content skipped ({blob_name})")
+        return
     raw_text_model = ExtractedDocumentModel(
-        document_content=doc_result.content,
+        document_content=content,
         file_md5=blob_md5,
         file_path=blob_name,
         format="markdown",
-        langs={lang.locale for lang in doc_result.languages or [] if lang.confidence >= CONFIG.features.extract_lang_confidence_threshold},
-        title=title_paragraph.content if title_paragraph else None,
+        langs=langs,
+        title=title,
     )
     # Store
     out_path = f"{EXTRACT_FOLDER}/{blob_md5}.json"
@@ -214,13 +193,10 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # Prepare chunks for LLM
-    chuncks = _split_text(
-        text=extracted_model.document_content,
-        max_tokens=int(
-            CONFIG.llm.slow.context * 0.8
-        ),  # For simplicity, we count tokens with a 20% margin
-        model=CONFIG.llm.slow.model,  # We will use the slow model next step
+    llm_client = CONFIG.llm.instance(
+        is_fast=False,  # We will use the slow model next step
     )
+    chuncks = llm_client.chunck(text=extracted_model.document_content)
     logger.info(f"Splited to {len(chuncks)} chuncks ({blob_name})")
     # Store
     for i, chunck in enumerate(chuncks):  # TODO: Make this async
@@ -233,9 +209,10 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
             langs=extracted_model.langs,
             title=extracted_model.title,
         )
-        out_path = _replace_root_path(
-            _replace_extension(blob_name, f"-{i}.json"), CHUNCK_FOLDER
+        out_path = replace_root_path(
+            replace_extension(blob_name, f"-{i}.json"), CHUNCK_FOLDER
         )
+        logger.info(f"Saving chunck {i + 1}/{len(chuncks)} ({out_path})")
         out_client = await _use_blob_client(out_path)
         try:
             await out_client.upload_blob(data=out_model.model_dump_json())
@@ -274,8 +251,10 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         if len(req) < 10:  # Arbitrary minimum length
             return False, "Response too short", None
         return True, None, req
-    synthesis_str = await _llm_generate(
+    llm_client = CONFIG.llm.instance(
         is_fast=False,  # We want high quality summaries because they are used to avoid hallucinations in the next steps
+    )
+    synthesis_str = await llm_client.generate(
         max_tokens=500,  # 500 tokens ~= 375 words
         res_object=str,
         validation_callback=_validate,
@@ -324,8 +303,8 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         title=chuncked_model.title,
     )
     # Store
-    out_path = _replace_root_path(
-        _replace_extension(blob_name, ".json"), SYNTHESIS_FOLDER
+    out_path = replace_root_path(
+        replace_extension(blob_name, ".json"), SYNTHESIS_FOLDER
     )
     out_client = await _use_blob_client(out_path)
     try:
@@ -360,21 +339,18 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # Prepare chunks for LLM
-    pages = _split_text(
+    llm_client = CONFIG.llm.instance(
+        is_fast=True,  # We will use the fast model
+    )
+    pages = llm_client.chunck(
         max_tokens=CONFIG.features.page_split_size,
-        model=CONFIG.llm.fast.model,  # We will use the fast model next step
         text=synthesis_model.chunk_content,
     )
     logger.info(f"Splited to {len(pages)} pages ({blob_name})")
     # Store
     for i, page in enumerate(pages):  # TODO: Make this async
-        # First, clean
-        page = _clean_page(page)
-        if not page:
-            logger.warning(f"Page skipped ({blob_name})")
-            continue
-        # Second, filter-out pages with excessive repetition
-        if _is_repetition_removal(
+        # Filter-out pages with excessive repetition
+        if has_excessive_repetition(
             text=page,
             threshold_ratio=1.5,  # We are less strict than the paper because this is all normally internal data and we are not training a model
         ):
@@ -392,9 +368,10 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
             synthesis=synthesis_model.synthesis,
             title=synthesis_model.title,
         )
-        out_path = _replace_root_path(
-            _replace_extension(blob_name, f"-{i}.json"), PAGE_FOLDER
+        out_path = replace_root_path(
+            replace_extension(blob_name, f"-{i}.json"), PAGE_FOLDER
         )
+        logger.info(f"Saving page {i + 1}/{len(pages)} ({out_path})")
         out_client = await _use_blob_client(out_path)
         try:
             await out_client.upload_blob(data=out_model.model_dump_json())
@@ -423,6 +400,9 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # LLM does its magic
+    llm_client = CONFIG.llm.instance(
+        is_fast=True,  # We will use the fast model
+    )
     facts: list[FactModel] = []
     for _ in range(CONFIG.features.fact_iterations):  # We will generate facts 10 times
         def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[FactedLlmModel]]:
@@ -433,8 +413,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
                 return True, None, FactedLlmModel.model_validate_json(req)
             except ValidationError as e:
                 return False, str(e), None
-        facted_llm_model = await _llm_generate(
-            is_fast=True,  # We will use the fast model
+        facted_llm_model = await llm_client.generate(
             res_object=FactedLlmModel,
             temperature=1,  # We want creative answers
             validation_callback=_validate,
@@ -495,8 +474,8 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         title=paged_model.title,
     )
     # Store
-    out_path = _replace_root_path(
-        _replace_extension(blob_name, ".json"), FACT_FOLDER
+    out_path = replace_root_path(
+        replace_extension(blob_name, ".json"), FACT_FOLDER
     )
     out_client = await _use_blob_client(out_path)
     try:
@@ -538,10 +517,12 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
             if group:
                 return True, None, float(group.group())
             return False, "Score not detected", None
+    llm_client = CONFIG.llm.instance(
+        is_fast=False,  # We want high quality to avoid using human validation which is even more costly and slower
+    )
     fact_scores = await asyncio.gather(
         *[
-            _llm_generate(
-                is_fast=False,  # We want high quality to avoid using human validation which is even more costly and slower
+            llm_client.generate(
                 max_tokens=10,  # We only need a float score
                 res_object=float,
                 validation_callback=_validate,
@@ -615,8 +596,8 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         return
     logger.info(f"Filtered to {len(facted_model.facts)}/{initial_fact_count} facts ({blob_name})")
     # Store
-    out_path = _replace_root_path(
-        _replace_extension(blob_name, ".json"), CRITIC_FOLDER
+    out_path = replace_root_path(
+        replace_extension(blob_name, ".json"), CRITIC_FOLDER
     )
     out_client = await _use_blob_client(out_path)
     try:
@@ -652,319 +633,14 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
             context=fact.context,
             document_synthesis=facted_model.synthesis,
             file_path=facted_model.file_path,
-            id=_hash_text(f"{facted_model.file_md5}-{facted_model.chunk_number + facted_model.page_number + i}"),  # Reproducible ID over the same raw document
+            id=hash_text(f"{facted_model.file_md5}-{facted_model.chunk_number + facted_model.page_number + i}"),  # Reproducible ID over the same raw document
             question=fact.question,
         )
         for i, fact in enumerate(facted_model.facts)
     ]
     # Index
-    logger.info(f"Indexing {len(indexed_models)} documents to AI Search ({blob_name})")
-    indexed_dicts = TypeAdapter(list[IndexedDocumentModel]).dump_python(
-        indexed_models, mode="json"
-    )
-    if CONFIG.destination.mode == DestinationModeEnum.AI_SEARCH:
-        logger.info(f"Indexing to AI Search")
-        search_client = await CONFIG.destination.ai_search.instance()
-        await search_client.merge_or_upload_documents(indexed_dicts)  # Will overwrite existing documents
-
-
-def _split_text(text: str, max_tokens: int, model: str) -> list[str]:
-    """
-    Split a text into chunks of text with a maximum number of tokens and characters.
-
-    The function returns a list of text chunks.
-    """
-    contents = []
-    max_chars = int(1048576 * 0.9)  # REST API has a limit of 1MB, with a 10% margin
-    token_count = _count_tokens(content=text, model=model)
-
-    if token_count < max_tokens:  # For simplicity, we count tokens with a 10% margin
-        contents.append(text)
-
-    else:  # We split the document in chunks
-        ckuncks_count = math.ceil(token_count / max_tokens)
-        chunck_size = math.ceil(len(text) / ckuncks_count)
-        if chunck_size > max_chars:  # Test if chunk size is too big for REST API
-            ckuncks_count = math.ceil(token_count / max_chars)
-            chunck_size = math.ceil(len(text) / ckuncks_count)
-        for i in range(ckuncks_count):  # Iterate over desired chunks count
-            start = max(i * chunck_size - CONFIG.features.page_split_margin, 0)  # First chunk with margin
-            end = min(
-                (i + 1) * chunck_size + CONFIG.features.page_split_margin, len(text)
-            )  # Last chunk with margin
-            contents.append(text[start:end])
-
-    return contents
-
-
-async def _llm_generate(
-    is_fast: bool,
-    prompt: str,
-    res_object: type[T],
-    validation_callback: Callable[[Optional[str]], tuple[bool, Optional[str], Optional[T]]],
-    temperature: float = 0,
-    max_tokens: Optional[int] = None,
-    _previous_result: Optional[str] = None,
-    _retries_remaining: int = CONFIG.features.llm_retry_count,
-    _validation_error: Optional[str] = None,
-) -> Optional[T]:
-    """
-    Generate a completion from a prompt using OpenAI.
-
-    The completion is generated using the LLM model.
-    """
-    logger.info("LLM completion generation")
-    # Generate
-    openai_client, config = await (CONFIG.llm.fast if is_fast else CONFIG.llm.slow).instance()
-    messages = [
-        ChatCompletionSystemMessageParam(
-            content=prompt,
-            role="system",
-        ),
-    ]
-    if _validation_error:
-        messages.append(
-            ChatCompletionSystemMessageParam(
-                role="system",
-                content=f"""
-                A validation error occurred during the previous attempt.
-
-                # Previous result
-                {_previous_result or "N/A"}
-
-                # Error details
-                {_validation_error}
-                """,
-            )
-        )
-    llm_res = await openai_client.chat.completions.create(
-        max_tokens=max_tokens,
-        messages=messages,
-        model=config.model,
-        temperature=temperature,
-    )
-    llm_str = llm_res.choices[0].message.content  # type: ignore
-    # Validate
-    is_valid, validation_error, res_object = validation_callback(llm_str)
-    if not is_valid:
-        if _retries_remaining == 0:
-            logger.error(f"LLM validation error: {validation_error}")
-            return None
-        logger.warning(f"LLM validation error, retrying ({_retries_remaining} retries left)")
-        return await _llm_generate(
-            is_fast=is_fast,
-            max_tokens=max_tokens,
-            prompt=prompt,
-            res_object=res_object,
-            temperature=temperature,
-            validation_callback=validation_callback,
-            _previous_result=llm_str,
-            _retries_remaining=_retries_remaining - 1,
-            _validation_error=validation_error,
-        )
-    return res_object
-
-
-def _clean_page(
-    text: str,
-    max_word_length: int = 1000,
-    min_words_per_line: int = 5,
-) -> Optional[str]:
-    """
-    Cleans text, return nothing if it should be skipped.
-
-    Cleaning removes lines with no end marks or with too few words. After line filtering, pages are filtered out if they have too few sentences based on a simple count of end marks.
-
-    This functions implement "Clean Crawled Corpus" from Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer (https://arxiv.org/abs/1910.10683).
-
-    Return the cleaned text.
-    """
-    ellipsis = "..."
-    end_marks = (".", "?", "!", '"')
-    policy_substrings = [
-        "cookie policy",
-        "privacy policy",
-        "terms of use",
-        "use cookies",
-        "use of cookies",
-        "uses cookies",
-    ]
-
-    lines = text.splitlines()  # Split by lines
-    valid_lines = []
-
-    def _line_has_too_long_word(line):
-        """
-        Check if a line contains a word that is too long.
-        """
-        for word in line.split():  # Split by whitespace
-            if len(word) > max_word_length:  # Check if word is too long
-                return True
-        return False
-
-    for line in lines:
-        line = line.strip()
-        if _line_has_too_long_word(line):  # Skip lines with too long words
-            continue
-        if not line.endswith(end_marks) or line.endswith(
-            ellipsis
-        ):  # Skip lines without end marks
-            continue
-        if len(line.split()) < min_words_per_line:  # Skip lines with too few words
-            continue
-        line_lower = line.lower()
-        if "lorem ipsum" in line_lower:  # Skip entire page if it contains lorem ipsum
-            logger.info("Lorem ipsum detected, skipping page")
-            return
-        if any(p in line_lower for p in policy_substrings):  # Skip policy lines
-            continue
-        valid_lines.append(line)
-
-    if not valid_lines:  # Skip empty pages
-        logger.info("Empty page, skipping")
-        return
-
-    logger.info(f"Page cleaned, {len(lines)/len(valid_lines):.2f}x reduction")
-    return "\n".join(valid_lines).strip()
-
-
-def _is_repetition_removal(
-    text: str,
-    threshold_ratio: float = 1.0,
-) -> bool:
-    """
-    Check if there is repeated content in the input text. Excessive repetition is often linked with uninformative content and can be used to determine whether it is low-quality text.
-
-    Threshold ratio is relative to the recommended values in the paper. The default value is 1.0, which corresponds to the recommended values.
-
-    This function implements "Repetition Removal" from Scaling Language Models: Methods, Analysis & Insights from Training Gopher (https://arxiv.org/abs/2112.11446).
-
-    Return True if the text is considered to have excessive repetition, False otherwise.
-    """
-    duplicate_line_character_faction = (
-        0.2 * threshold_ratio
-    )  # Duplicate line character fraction
-    duplicate_line_fraction = 0.3 * threshold_ratio  # Duplicate line fraction
-
-    dup_line = 0
-    dup_line_chars = 0
-    line_count = 0
-    visit_lines = {}
-
-    # Check for repeated lines
-    for line in text.splitlines():
-        line_hash = _hash_text(line)
-        if line_hash in visit_lines:
-            dup_line += 1
-            dup_line_chars += len(line)
-        visit_lines[line_hash] = True
-        line_count += 1
-
-    if (
-        float(dup_line) / line_count > duplicate_line_fraction
-    ):  # Excessive repeated lines
-        return True
-
-    if (
-        float(dup_line_chars) / len(text) > duplicate_line_character_faction
-    ):  # Excessive repeated characters
-        return True
-
-    top_ngram_character_fractions = [
-        (2, 0.2 * threshold_ratio),  # Top 2-gram character fraction
-        (3, 0.18 * threshold_ratio),  # Top 3-gram character fraction
-        (4, 0.16 * threshold_ratio),  # Top 4-gram character fraction
-    ]
-    for ngram, threshold in top_ngram_character_fractions:
-        bgs = nltk.ngrams(text.split(), ngram)
-        fdist = nltk.FreqDist(bgs)
-        for word_list, repeat in fdist.items():
-            char_count = sum([len(word) for word in word_list])
-            if char_count * (repeat - 1) / len(text) > threshold:
-                return True
-
-    duplicate_ngram_character_fractions = [
-        (5, 0.15 * threshold_ratio),  # Duplicate 5-gram character fraction
-        (6, 0.14 * threshold_ratio),  # Duplicate 6-gram character fraction
-        (7, 0.13 * threshold_ratio),  # Duplicate 7-gram character fraction
-        (8, 0.12 * threshold_ratio),  # Duplicate 8-gram character fraction
-        (9, 0.11 * threshold_ratio),  # Duplicate 9-gram character fraction
-        (10, 0.10 * threshold_ratio),  # Duplicate 10-gram character fraction
-    ]
-    for ngram, threshold in duplicate_ngram_character_fractions:
-        fdist = {}
-        word_list = text.split()
-        mark = [0] * len(word_list)
-        for i in range(len(word_list) - ngram + 1):
-            bag = tuple(word_list[i : i + ngram])
-            if bag in fdist:
-                for j in range(i, i + ngram):
-                    mark[j] = len(word_list[j])
-                fdist[bag] += 1
-            else:
-                fdist[bag] = 1
-
-        if sum(mark) / float(len(text)) > threshold:
-            return True
-
-    return False
-
-
-def _hash_text(text: str) -> str:
-    """
-    Hash a text using MD5.
-
-    MD5 is as of today the fastest hash function available. It has collision vulnerabilities, but it is not a concern in this context.
-
-    Return the MD5 hash of the text.
-    """
-    return hashlib.md5(
-        string=text.encode(),
-        usedforsecurity=False,
-    ).hexdigest()
-
-
-def _count_tokens(content: str, model: str) -> int:
-    """
-    Returns the number of tokens in the content, using the model's encoding.
-
-    If the model is unknown to TikToken, it uses the GPT-3.5 encoding.
-    """
-    try:
-        encoding_name = tiktoken.encoding_name_for_model(model)
-    except KeyError:
-        encoding_name = tiktoken.encoding_name_for_model("gpt-3.5")
-        logger.debug(f"Unknown model {model}, using {encoding_name} encoding")
-    return len(tiktoken.get_encoding(encoding_name).encode(content))
-
-
-def _replace_root_path(file_path: str, new_root: str) -> str:
-    """
-    Replace the root path of a file path.
-
-    For example, if the file path is "raw/2022-01-01/file.txt" and the new root is "fact", the new file path will be "fact/2022-01-01/file.txt".
-    """
-    return new_root + "/" + "".join(file_path.split("/")[1:])
-
-
-def _replace_extension(file_path: str, new_extension: str) -> str:
-    """
-    Replace the extension of a file path.
-
-    For example, if the file path is "file.txt" and the new extension is "json", the new file path will be "file.json".
-    """
-    return "".join(file_path.split(".")[:-1]) + new_extension
-
-
-def _detect_extension(file_path: str) -> str:
-    """
-    Detect the extension of a file path.
-
-    For example, if the file path is "file.txt", the extension will be ".txt".
-
-    Return the extension in lowercase.
-    """
-    return "." + file_path.lower().split(".")[-1]
+    destination_client = CONFIG.destination.instance()
+    await destination_client.index(indexed_models)
 
 
 async def _use_blob_client(
