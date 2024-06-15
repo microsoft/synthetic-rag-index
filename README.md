@@ -230,17 +230,23 @@ Place a file called `config.yaml` in the root of the project with the following 
 # config.yaml
 llm:
   fast:
-    api_key: xxx
-    context: 16385
-    deployment: gpt-35-turbo-0125
-    endpoint: https://xxx.openai.azure.com
-    model: gpt-35-turbo
+    mode: azure_openai
+    azure_openai:
+      api_key: xxx
+      context: 16385
+      deployment: gpt-35-turbo-0125
+      endpoint: https://xxx.openai.azure.com
+      model: gpt-35-turbo
+      streaming: true
   slow:
-    api_key: xxx
-    context: 128000
-    deployment: gpt-4o-2024-05-13
-    endpoint: https://xxx.openai.azure.com
-    model: gpt-4o
+    mode: azure_openai
+    azure_openai:
+      api_key: xxx
+      context: 128000
+      deployment: gpt-4o-2024-05-13
+      endpoint: https://xxx.openai.azure.com
+      model: gpt-4o
+      streaming: true
 
 destination:
   mode: ai_search

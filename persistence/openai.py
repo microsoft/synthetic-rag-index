@@ -1,21 +1,22 @@
-from helpers.config_models.llm import BackendModel as LlmBackendModel
+from abc import abstractmethod
+from azure.identity import ManagedIdentityCredential, get_bearer_token_provider
+from helpers.config_models.llm import AzureOpenaiPlatformModel, OpenaiPlatformModel
 from helpers.logging import logger
-from openai import AsyncAzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 from openai.types.chat import ChatCompletionSystemMessageParam
 from persistence.illm import ILlm
-from typing import Optional, TypeVar, Callable
-import math
+from typing import Optional, TypeVar, Callable, Union
 import tiktoken
 
 
 T = TypeVar("T")
 
 
-class AzureOpenaiLlm(ILlm):
+class AbstractOpenaiLlm(ILlm):
     _client: Optional[AsyncAzureOpenAI] = None
-    _config: LlmBackendModel
+    _config: Union[AzureOpenaiPlatformModel, OpenaiPlatformModel]
 
-    def __init__(self, config: LlmBackendModel):
+    def __init__(self, config: Union[AzureOpenaiPlatformModel, OpenaiPlatformModel]):
         self._config = config
 
     async def generate(
@@ -184,19 +185,53 @@ class AzureOpenaiLlm(ILlm):
                             current_chunk += h4_content + "\n"
         # Add the last chunk
         if current_chunk:
-            contents.append("\n".join(current_chunk.splitlines()[:-1]).strip())
+            contents.append(current_chunk.strip())
 
         # Return the chunks
         return contents
 
+    @abstractmethod
+    def _use_client(self) -> AsyncOpenAI:
+        pass
+
+
+class AzureOpenaiLlm(AbstractOpenaiLlm):
+    def __init__(self, config: AzureOpenaiPlatformModel):
+        super().__init__(config)
 
     def _use_client(self) -> AsyncAzureOpenAI:
         if not self._client:
+            api_key = self._config.api_key.get_secret_value() if self._config.api_key else None
+            token_func = (
+                get_bearer_token_provider(
+                    ManagedIdentityCredential(),
+                    "https://cognitiveservices.azure.com/.default",
+                )
+                if not self._config.api_key
+                else None
+            )
             self._client = AsyncAzureOpenAI(
                 # Deployment
                 api_version="2023-12-01-preview",
                 azure_deployment=self._config.deployment,
                 azure_endpoint=self._config.endpoint,
+                # Reliability
+                max_retries=30,  # We are patient, this is a background job :)
+                timeout=180,  # 3 minutes
+                # Authentication
+                api_key=api_key,
+                azure_ad_token_provider=token_func,
+            )
+        return self._client
+
+
+class OpenaiLlm(AbstractOpenaiLlm):
+    def __init__(self, config: OpenaiPlatformModel):
+        super().__init__(config)
+
+    def _use_client(self) -> AsyncOpenAI:
+        if not self._client:
+            self._client = AsyncOpenAI(
                 # Reliability
                 max_retries=30,  # We are patient, this is a background job :)
                 timeout=180,  # 3 minutes

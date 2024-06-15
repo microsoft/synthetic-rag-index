@@ -192,9 +192,9 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # Prepare chunks for LLM
-    llm_client = CONFIG.llm.instance(
+    llm_client = CONFIG.llm.selected(
         is_fast=False,  # We will use the slow model next step
-    )
+    ).instance()
     chuncks = llm_client.chunck(text=extracted_model.document_content)
     logger.info(f"Splited to {len(chuncks)} chuncks ({blob_name})")
     # Store
@@ -250,9 +250,9 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         if len(req) < 10:  # Arbitrary minimum length
             return False, "Response too short", None
         return True, None, req
-    llm_client = CONFIG.llm.instance(
+    llm_client = CONFIG.llm.selected(
         is_fast=False,  # We want high quality summaries because they are used to avoid hallucinations in the next steps
-    )
+    ).instance()
     synthesis_str = await llm_client.generate(
         max_tokens=500,  # 500 tokens ~= 375 words
         res_object=str,
@@ -338,9 +338,9 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # Prepare chunks for LLM
-    llm_client = CONFIG.llm.instance(
+    llm_client = CONFIG.llm.selected(
         is_fast=True,  # We will use the fast model
-    )
+    ).instance()
     pages = llm_client.chunck(
         max_tokens=CONFIG.features.page_split_size,
         text=synthesis_model.chunk_content,
@@ -399,9 +399,9 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         # Free up memory
         del content
     # LLM does its magic
-    llm_client = CONFIG.llm.instance(
+    llm_client = CONFIG.llm.selected(
         is_fast=True,  # We will use the fast model
-    )
+    ).instance()
     facts: list[FactModel] = []
     for _ in range(CONFIG.features.fact_iterations):  # We will generate facts 10 times
         def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[FactedLlmModel]]:
@@ -516,9 +516,9 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
             if group:
                 return True, None, float(group.group())
             return False, "Score not detected", None
-    llm_client = CONFIG.llm.instance(
+    llm_client = CONFIG.llm.selected(
         is_fast=False,  # We want high quality to avoid using human validation which is even more costly and slower
-    )
+    ).instance()
     fact_scores = await asyncio.gather(
         *[
             llm_client.generate(
