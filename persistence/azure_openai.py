@@ -108,24 +108,87 @@ class AzureOpenaiLlm(ILlm):
         if not max_tokens:  # For simplicity, we count tokens with a 20% marginμ
             max_tokens=int(self._config.context * 0.8)
 
-        token_count = self.count_tokens(content=text)
-
-        if token_count < max_tokens:  # If the document is small enough, we don't split it
+        if self.count_tokens(text) < max_tokens and len(text) < max_chars:  # If the text is small enough
             contents.append(text)
             return contents
 
-        ckuncks_count = math.ceil(token_count / max_tokens)
-        chunck_size = math.ceil(len(text) / ckuncks_count)
-        if chunck_size > max_chars:  # Test if chunk size is too big for REST API
-            ckuncks_count = math.ceil(token_count / max_chars)
-            chunck_size = math.ceil(len(text) / ckuncks_count)
-        for i in range(ckuncks_count):  # Iterate over desired chunks count
-            start = max(i * chunck_size - self._config.page_split_margin, 0)  # First chunk with margin
-            end = min(
-                (i + 1) * chunck_size + self._config.page_split_margin, len(text)
-            )  # Last chunk with margin
-            contents.append(text[start:end])
+        # Split the text by Markdown headings
+        h1_title = ""
+        h2_title = ""
+        h3_title = ""
+        h4_title = ""
+        headings: dict[dict[dict[dict[str, str], str], str], str] = {}
+        for line in text.splitlines():
+            if line.startswith("# "):
+                h1_title = line[2:]
+                h2_title = ""
+                h3_title = ""
+                h4_title = ""
+                continue
+            if line.startswith("## "):
+                h2_title = line[3:]
+                h3_title = ""
+                h4_title = ""
+                continue
+            if line.startswith("### "):
+                h3_title = line[4:]
+                h4_title = ""
+                continue
+            if line.startswith("#### "):
+                h4_title = line[5:]
+                continue
+            if not line:
+                continue
+            if h1_title not in headings:
+                headings[h1_title] = {}
+            if h2_title not in headings[h1_title]:
+                headings[h1_title][h2_title] = {}
+            if h3_title not in headings[h1_title][h2_title]:
+                headings[h1_title][h2_title][h3_title] = {}
+            if h4_title not in headings[h1_title][h2_title][h3_title]:
+                headings[h1_title][h2_title][h3_title][h4_title] = ""
+            headings[h1_title][h2_title][h3_title][h4_title] += line + "\n"
+
+        # Split document into the biggest chunks possible
+        current_chunk = ""
+        for h1_head, h1_next in headings.items():
+            if h1_head:
+                current_chunk += f"# {h1_head}\n"
+            for h2_head, h2_next in h1_next.items():
+                if h2_head:
+                    current_chunk += f"## {h2_head}\n"
+                for h3_head, h3_next in h2_next.items():
+                    if h3_head:
+                        current_chunk += f"### {h3_head}\n"
+                    for h4_head, h4_content in h3_next.items():
+                        if self.count_tokens(current_chunk) >= max_tokens or len(current_chunk) >= max_chars:  # If the chunk is too big
+                            to_remove = 0
+                            previous_lines = current_chunk.splitlines()
+                            previous_lines.reverse()
+                            for previous_line in previous_lines:
+                                if not previous_line.startswith("#"):
+                                    break
+                                to_remove += 1
+                            contents.append("\n".join(current_chunk.splitlines()[:-(to_remove + 1)]).strip())  # Remove the last heading
+                            # Re-apply the last heading to the next chunk
+                            current_chunk = ""
+                            if h1_head:
+                                current_chunk = f"# {h1_head}\n"
+                            if h2_head:
+                                current_chunk += f"## {h2_head}\n"
+                            if h3_head:
+                                current_chunk += f"### {h3_head}\n"
+                        if h4_content:
+                            if h4_head:
+                                current_chunk += f"#### {h4_head}\n"
+                            current_chunk += h4_content + "\n"
+        # Add the last chunk
+        if current_chunk:
+            contents.append("\n".join(current_chunk.splitlines()[:-1]).strip())
+
+        # Return the chunks
         return contents
+
 
     def _use_client(self) -> AsyncAzureOpenAI:
         if not self._client:
