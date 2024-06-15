@@ -184,7 +184,7 @@ class AzureOpenaiLlm(ILlm):
                             current_chunk += h4_content + "\n"
         # Add the last chunk
         if current_chunk:
-            contents.append("\n".join(current_chunk.splitlines()[:-1]).strip())
+            contents.append(current_chunk.strip())
 
         # Return the chunks
         return contents
