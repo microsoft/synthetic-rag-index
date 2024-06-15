@@ -405,9 +405,6 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
     facts: list[FactModel] = []
     for _ in range(CONFIG.features.fact_iterations):  # We will generate facts 10 times
         def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[FactedLlmModel]]:
-            if not req:
-                return False, "Empty response", None
-            req = req.strip().strip("```json\n").strip("\n```").strip()
             try:
                 return True, None, FactedLlmModel.model_validate_json(req)
             except ValidationError as e:
@@ -415,6 +412,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         facted_llm_model = await llm_client.generate(
             res_object=FactedLlmModel,
             temperature=1,  # We want creative answers
+            validate_json=True,
             validation_callback=_validate,
             prompt=f"""
             Assistant is an expert data analyst with 20 years of experience.

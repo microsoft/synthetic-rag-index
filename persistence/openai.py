@@ -24,8 +24,9 @@ class AbstractOpenaiLlm(ILlm):
         prompt: str,
         res_object: type[T],
         validation_callback: Callable[[Optional[str]], tuple[bool, Optional[str], Optional[T]]],
-        temperature: float = 0,
         max_tokens: Optional[int] = None,
+        temperature: float = 0,
+        validate_json: bool = False,
         _previous_result: Optional[str] = None,
         _retries_remaining: Optional[int] = None,
         _validation_error: Optional[str] = None,
@@ -59,6 +60,10 @@ class AbstractOpenaiLlm(ILlm):
                 )
             )
 
+        extra = {}
+        if validate_json:
+            extra["response_format"] = {"type": "json_object"}
+
         # Generate
         client = self._use_client()
         res = await client.chat.completions.create(
@@ -66,6 +71,7 @@ class AbstractOpenaiLlm(ILlm):
             messages=messages,
             model=self._config.model,
             temperature=temperature,
+            **extra,
         )
         res_content = res.choices[0].message.content  # type: ignore
 
@@ -81,6 +87,7 @@ class AbstractOpenaiLlm(ILlm):
                 prompt=prompt,
                 res_object=res_object,
                 temperature=temperature,
+                validate_json=validate_json,
                 validation_callback=validation_callback,
                 _previous_result=res_content,
                 _retries_remaining=_retries_remaining - 1,
