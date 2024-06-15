@@ -33,7 +33,6 @@ from unidecode import unidecode
 import pikepdf
 import re
 from helpers.file import detect_extension, replace_root_path, replace_extension, hash_text, sanitize_text, has_excessive_repetition
-import math
 
 
 # Azure Functions
