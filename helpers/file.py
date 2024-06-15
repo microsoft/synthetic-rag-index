@@ -59,7 +59,7 @@ def sanitize_text(
 
     Return the cleaned text.
     """
-    markdown_start_marks = ("#", "*", "-", "+", "_", ">")
+    markdown_start_marks = ("#", "*", "-", "+", "_", ">", "|", "`")
     text_end_ellipsis = "..."
     text_end_marks = (".", "?", "!", '"')
     policy_substrings = [
