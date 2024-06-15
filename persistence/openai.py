@@ -232,6 +232,8 @@ class OpenaiLlm(AbstractOpenaiLlm):
     def _use_client(self) -> AsyncOpenAI:
         if not self._client:
             self._client = AsyncOpenAI(
+                # API root URL
+                base_url=self._config.endpoint,
                 # Reliability
                 max_retries=30,  # We are patient, this is a background job :)
                 timeout=180,  # 3 minutes
