@@ -52,6 +52,7 @@ SYNTHESIS_FOLDER = "3-synthesis"
 
 # Clients
 _container_client: Optional[ContainerClient] = None
+pikepdf.settings.set_flate_compression_level(9)  # Maximum compression level for PDFs
 
 # Custom types
 T = TypeVar("T")
@@ -104,6 +105,8 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
                     filename_or_stream=out_stream,
                     linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
                     min_version=CONFIG.features.sanitize_pdf_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
+                    object_stream_mode=pikepdf.ObjectStreamMode.generate,  # Generate object streams
+                    recompress_flate=True,  # Recompress with flate compression
                 )
                 await _upload(
                     data=out_stream.getbuffer(),
