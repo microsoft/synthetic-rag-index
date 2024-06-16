@@ -157,38 +157,56 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
         name=input.blob_name,  # type: ignore
         snapshot=input.snapshot,  # type: ignore
     ) as blob_client:
-        blob_name = blob_client.blob_name
+        in_remote_path = blob_client.blob_name
         blob_properties: BlobProperties = await blob_client.get_blob_properties()
         blob_md5 = b64encode(blob_properties.content_settings.content_md5).hex()  # See: https://github.com/Azure/azure-sdk-for-python/issues/13104#issuecomment-678033167
-        logger.info(f"Processing raw blob ({blob_name})")
-        downloader = await blob_client.download_blob()
-        content = await downloader.readall()  # TODO: Use stream (files can be large)
-    # Analyze document
-    doc_client = CONFIG.document_intelligence.instance()
-    content, title, langs = await doc_client.analyze(
-        document=content,
-        file_name=blob_name,
-    )
-    # Clean content
-    content = sanitize_text(content)
-    if not content:
-        logger.warning(f"Content skipped ({blob_name})")
-        return
-    raw_text_model = ExtractedDocumentModel(
-        document_content=content,
-        file_md5=blob_md5,
-        file_path=blob_name,
-        format="markdown",
-        langs=langs,
-        title=title,
-    )
-    # Store
-    out_path = f"{EXTRACT_FOLDER}/{blob_md5}.json"
-    out_client = await _use_blob_client(out_path)
-    try:
-        await out_client.upload_blob(data=raw_text_model.model_dump_json())
-    except ResourceExistsError:
-        logger.info(f"Document already exists, skipping ({out_path})")
+        logger.info(f"Processing raw blob ({in_remote_path})")
+
+        with NamedTemporaryFile() as in_local_path:  # Temp file for source
+            # Download and save
+            downloader = await blob_client.download_blob()
+            await downloader.readinto(in_local_path)
+            in_local_path.seek(0)  # Reset file pointer
+            doc_client = CONFIG.document_intelligence.instance()
+
+            if detect_extension(in_remote_path) in doc_client.compatible_formats():  # Analyze document
+                logger.info(f"Extracting content with Document Intelligence ({in_remote_path})")
+                content, title, langs = await doc_client.analyze(
+                    document=in_local_path.file,
+                    file_name=in_remote_path,
+                )
+                format = "markdown"
+                # Clean content
+                content = sanitize_text(content)
+
+            else:  # Store as is
+                logger.info(f"Extracting binary content ({in_remote_path})")
+                with open(in_local_path.name, "rb") as in_local_path:
+                    content = in_local_path.read().decode("utf-8")
+                    format = "raw"
+                    langs = None
+                    title = None
+
+        # Build model
+        if not content:
+            logger.warning(f"Content skipped ({in_remote_path})")
+            return
+        raw_text_model = ExtractedDocumentModel(
+            document_content=content,
+            file_md5=blob_md5,
+            file_path=in_remote_path,
+            format=format,
+            langs=langs,
+            title=title,
+        )
+
+        # Store
+        out_path = f"{EXTRACT_FOLDER}/{blob_md5}.json"
+        out_client = await _use_blob_client(out_path)
+        try:
+            await out_client.upload_blob(data=raw_text_model.model_dump_json())
+        except ResourceExistsError:
+            logger.info(f"Document already exists, skipping ({out_path})")
 
 
 @app.blob_trigger(

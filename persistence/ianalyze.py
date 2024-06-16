@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import Any, Generator, Optional
+from typing import IO, Generator, Optional
 
 
 class IAnalyze(ABC):
     @abstractmethod
     async def analyze(
         self,
-        document: bytes,
+        document: IO[bytes],
         file_name: str,
     ) -> tuple[str, Optional[str], list[str]]:
         """
@@ -19,10 +19,14 @@ class IAnalyze(ABC):
         pass
 
     @abstractmethod
-    def chunck(self, pages: list[Any]) -> Generator[tuple[list[int], int, int], None, None]:
+    def chunck(self, pages_count: int) -> Generator[tuple[list[int], int, int], None, None]:
         """
         Split the pages into chunks of the maximum size allowed by the service.
 
         Yields a tuple of pages, start and chunck count.
         """
+        pass
+
+    @abstractmethod
+    def compatible_formats(self) -> set[str]:
         pass
