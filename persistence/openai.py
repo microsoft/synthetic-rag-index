@@ -6,6 +6,7 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI
 from openai.types.chat import ChatCompletionSystemMessageParam
 from persistence.illm import ILlm
 from typing import Optional, TypeVar, Callable, Union
+import math
 import tiktoken
 
 
@@ -157,42 +158,75 @@ class AbstractOpenaiLlm(ILlm):
                 headings[h1_title][h2_title][h3_title][h4_title] = ""
             headings[h1_title][h2_title][h3_title][h4_title] += line + "\n"
 
+        def _split_paragraph(
+            contents: list[str],
+            current_chunk: str,
+            h1_head: str,
+            h2_head: str,
+            h3_head: str,
+        ) -> str:
+            """
+            Split the current Markdown chunk into smaller chunks if it is inherently too big.
+
+            As the headings are only on the first chunk, we re-apply them to all the others.
+            """
+            def _rebuild_headings() -> str:
+                res = ""
+                if h1_head:
+                    res = f"# {h1_head}\n"
+                if h2_head:
+                    res += f"## {h2_head}\n"
+                if h3_head:
+                    res += f"### {h3_head}\n"
+                return res
+
+            # Remove the last heading
+            to_remove = 0
+            previous_lines = current_chunk.splitlines()
+            previous_lines.reverse()
+            for previous_line in previous_lines:
+                if not previous_line.startswith("#"):
+                    break
+                to_remove += 1
+            current_cleaned = "\n".join(current_chunk.splitlines()[:-(to_remove + 1)]).strip()
+
+            # Chunck if is still too big
+            current_cleaned_count = math.ceil(max(self.count_tokens(current_cleaned) / max_tokens, len(current_cleaned) / max_chars))
+            current_cleaned_chunck_size = math.ceil(len(current_cleaned) / current_cleaned_count)
+            for i in range(current_cleaned_count):  # Iterate over the chunks
+                chunck_content = current_cleaned[i*current_cleaned_chunck_size:(i+1)*current_cleaned_chunck_size]
+                if i == 0:  # Headings only on the first chunk
+                    contents.append(chunck_content)
+                else:  # Re-apply the last heading to the next chunk
+                    contents.append(_rebuild_headings() + chunck_content)
+
+            return _rebuild_headings()
+
         # Split document into the biggest chunks possible
         current_chunk = ""
         for h1_head, h1_next in headings.items():
-            if h1_head:
-                current_chunk += f"# {h1_head}\n"
+            last_h1_head = h1_head
+            if last_h1_head:
+                current_chunk += f"# {last_h1_head}\n"
             for h2_head, h2_next in h1_next.items():
-                if h2_head:
-                    current_chunk += f"## {h2_head}\n"
+                last_h2_head = h2_head
+                if last_h2_head:
+                    current_chunk += f"## {last_h2_head}\n"
                 for h3_head, h3_next in h2_next.items():
-                    if h3_head:
-                        current_chunk += f"### {h3_head}\n"
+                    last_h3_head = h3_head
+                    if last_h3_head:
+                        current_chunk += f"### {last_h3_head}\n"
                     for h4_head, h4_content in h3_next.items():
                         if self.count_tokens(current_chunk) >= max_tokens or len(current_chunk) >= max_chars:  # If the chunk is too big
-                            to_remove = 0
-                            previous_lines = current_chunk.splitlines()
-                            previous_lines.reverse()
-                            for previous_line in previous_lines:
-                                if not previous_line.startswith("#"):
-                                    break
-                                to_remove += 1
-                            contents.append("\n".join(current_chunk.splitlines()[:-(to_remove + 1)]).strip())  # Remove the last heading
                             # Re-apply the last heading to the next chunk
-                            current_chunk = ""
-                            if h1_head:
-                                current_chunk = f"# {h1_head}\n"
-                            if h2_head:
-                                current_chunk += f"## {h2_head}\n"
-                            if h3_head:
-                                current_chunk += f"### {h3_head}\n"
+                            current_chunk = _split_paragraph(contents, current_chunk, last_h1_head, last_h2_head, last_h3_head)
                         if h4_content:
                             if h4_head:
                                 current_chunk += f"#### {h4_head}\n"
                             current_chunk += h4_content + "\n"
         # Add the last chunk
         if current_chunk:
-            contents.append(current_chunk.strip())
+            _split_paragraph(contents, current_chunk, last_h1_head, last_h2_head, last_h3_head)
 
         # Return the chunks
         return contents
