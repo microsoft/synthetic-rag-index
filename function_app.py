@@ -13,7 +13,7 @@ from azure.storage.blob.aio import BlobClient, ContainerClient
 from azurefunctions.extensions.bindings.blob import BlobClient as BlobClientTrigger
 from os import getenv
 from pydantic import ValidationError
-from typing import Optional, TypeVar
+from typing import IO, Optional, TypeVar
 import asyncio
 import azure.functions as func
 import json
@@ -28,11 +28,12 @@ from helpers.models import (
     SynthetisedDocumentModel,
 )
 from base64 import b64encode
-from io import BytesIO
 from unidecode import unidecode
-import pikepdf
+import pymupdf
 import re
 from helpers.file import detect_extension, replace_root_path, replace_extension, hash_text, sanitize_text, has_excessive_repetition
+from tempfile import NamedTemporaryFile
+from os import remove
 
 
 # Azure Functions
@@ -51,7 +52,6 @@ SYNTHESIS_FOLDER = "3-synthesis"
 
 # Clients
 _container_client: Optional[ContainerClient] = None
-pikepdf.settings.set_flate_compression_level(9)  # Maximum compression level for PDFs
 
 # Custom types
 T = TypeVar("T")
@@ -66,14 +66,12 @@ T = TypeVar("T")
 async def raw_to_sanitize(input: BlobClientTrigger) -> None:
     """
     First, raw documents are sanitized to remove any sensitive information.
-
-    For PDF, QPDF (https://github.com/qpdf/qpdf) is used (from pikepdf) to save the document in a safe format.
     """
-    async def _upload(data: memoryview, in_path: str) -> None:
-        out_path = unidecode(replace_root_path(in_path, SANITIZE_FOLDER), replace_str="")  # Decode possible non ASCII characters
-        out_client = await _use_blob_client(out_path)
+    async def _upload(local_file: IO, remote_path: str) -> None:
+        remote_path = unidecode(replace_root_path(remote_path, SANITIZE_FOLDER), replace_str="")  # Decode possible non ASCII characters
+        out_client = await _use_blob_client(remote_path)
         await out_client.upload_blob(
-            data=data,
+            data=local_file,
             overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
         )
 
@@ -82,41 +80,66 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
         name=input.blob_name,  # type: ignore
         snapshot=input.snapshot,  # type: ignore
     ) as blob_client:
-        blob_name = blob_client.blob_name
-        logger.info(f"Processing raw blob ({blob_name})")
-        downloader = await blob_client.download_blob()
-        in_bytes = BytesIO()
-        await downloader.readinto(in_bytes)
-    if detect_extension(blob_name) == ".pdf":  # Sanitize PDF
-        with pikepdf.open(in_bytes) as in_pdf:
-            logger.info(f"Sanitizing PDF from v{in_pdf.pdf_version} to v{CONFIG.features.sanitize_pdf_version} ({blob_name})")
-            doc_client = CONFIG.document_intelligence.instance()
-            for pages_numbers, i, files_count in doc_client.chunck(in_pdf.pages):
-                out_stream = BytesIO()
-                out_pdf = pikepdf.Pdf.new()
-                for pages_number in pages_numbers:  # Copy pages
-                    out_pdf.pages.append(in_pdf.pages[pages_number])
-                out_path = replace_extension(blob_name, f"-{i}.pdf")
-                logger.info(f"Saving PDF file {i + 1}/{files_count} ({out_path})")
-                # See: https://qpdf.readthedocs.io/en/stable/cli.html
-                out_pdf.save(
-                    deterministic_id=True,  # Deterministic document ID for caching
-                    filename_or_stream=out_stream,
-                    linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
-                    min_version=CONFIG.features.sanitize_pdf_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
-                    object_stream_mode=pikepdf.ObjectStreamMode.generate,  # Generate object streams
-                    recompress_flate=True,  # Recompress with flate compression
+        in_remote_path = blob_client.blob_name
+        logger.info(f"Processing raw blob ({in_remote_path})")
+
+        with NamedTemporaryFile() as in_local_path:  # Temp file for source
+            # Download and save
+            downloader = await blob_client.download_blob()
+            await downloader.readinto(in_local_path)
+            in_local_path.seek(0)  # Reset file pointer
+
+            if detect_extension(in_remote_path) == ".pdf":  # Sanitize PDF
+                logger.info(f"Sanitizing PDF ({in_remote_path})")
+                doc_client = CONFIG.document_intelligence.instance()
+                # Open
+                in_pdf = pymupdf.open(in_local_path)
+                # Sanitize
+                in_pdf.scrub(
+                    hidden_text=False,  # Keep hidden text (it may contain OCR)
+                    remove_links=False,  # Keep links (they are extracted later)
+                    reset_fields=False,  # Keep form fields (they are extracted later)
                 )
+
+                for pages_numbers, i, chuncks_count in doc_client.chunck(in_pdf.page_count):  # Iterate over chuncks
+                    out_remote_path = replace_extension(in_remote_path, f"-{i}.pdf")
+                    out_local_path = NamedTemporaryFile(delete=False)  # Temp file for destination
+                    out_local_path.close()  # Close to allow pymupdf to open it later
+                    logger.info(f"Saving PDF file {i + 1}/{chuncks_count} ({out_remote_path})")
+
+                    # Create new PDF and insert selected pages
+                    out_pdf = pymupdf.Document()
+                    for pages_number in pages_numbers:
+                        out_pdf.insert_pdf(in_pdf, from_page=pages_number, to_page=pages_number)
+
+                    # Save and optimize
+                    out_pdf.save(
+                        out_local_path.name,
+                        appearance=True,  # Annotate buttons, form fields, and links
+                        clean=True,  # Clean and sanitize content streams
+                        compression_effort=100,  # Maximum compression
+                        deflate_fonts=True,  # Compress uncompressed fonts
+                        deflate_images=True,  # Compress uncompressed images
+                        deflate=True,  # Compress uncompressed streams
+                        garbage=4,  # Remove unused objects
+                        linear=True,  # Linearize the PDF for fast web view
+                        preserve_metadata=True,  # Preserve original metadata
+                    )
+
+                    # Upload
+                    with open(out_local_path.name, "rb") as out_local_path:
+                        await _upload(
+                            local_file=out_local_path,
+                            remote_path=out_remote_path,
+                        )
+                    remove(out_local_path.name)  # Clean-up
+
+            else:  # Store as is
+                logger.info(f"Saving raw blob as is ({in_remote_path})")
                 await _upload(
-                    data=out_stream.getbuffer(),
-                    in_path=out_path,
+                    local_file=in_local_path,
+                    remote_path=in_remote_path,
                 )
-    else:  # Store as is
-        logger.info(f"Saving raw blob as is ({blob_name})")
-        await _upload(
-            data=out_stream.getbuffer(),
-            in_path=blob_name,
-        )
 
 
 @app.blob_trigger(
