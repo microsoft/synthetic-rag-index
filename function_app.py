@@ -227,17 +227,16 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing extracted blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        extracted_model = ExtractedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        extracted_model = ExtractedDocumentModel.model_validate_json(await downloader.readall())
+
     # Prepare chunks for LLM
     llm_client = CONFIG.llm.selected(
         is_fast=False,  # We will use the slow model next step
     ).instance()
     chuncks = llm_client.chunck(text=extracted_model.document_content)
     logger.info(f"Splited to {len(chuncks)} chuncks ({blob_name})")
+
     # Store
     for i, chunck in enumerate(chuncks):  # TODO: Make this async
         out_model = ChunkedDocumentModel(
@@ -278,11 +277,9 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing chuncked blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        chuncked_model = ChunkedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        chuncked_model = ChunkedDocumentModel.model_validate_json(await downloader.readall())
+
     # LLM does its magic
     def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[str]]:
         if not req:
@@ -331,6 +328,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         {chuncked_model.chunk_content}
         """,  # TODO: Add at least 5 examples for different contexts
     )
+
     # Build model
     synthesis_model = SynthetisedDocumentModel(
         chunk_content=chuncked_model.chunk_content,
@@ -342,6 +340,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         synthesis=synthesis_str,
         title=chuncked_model.title,
     )
+
     # Store
     out_path = replace_root_path(
         replace_extension(blob_name, ".json"), SYNTHESIS_FOLDER
@@ -373,11 +372,9 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing synthesis blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        synthesis_model = SynthetisedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        synthesis_model = SynthetisedDocumentModel.model_validate_json(await downloader.readall())
+
     # Prepare chunks for LLM
     llm_client = CONFIG.llm.selected(
         is_fast=True,  # We will use the fast model
@@ -387,6 +384,7 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         text=synthesis_model.chunk_content,
     )
     logger.info(f"Splited to {len(pages)} pages ({blob_name})")
+
     # Store
     for i, page in enumerate(pages):  # TODO: Make this async
         # Filter-out pages with excessive repetition
@@ -434,11 +432,9 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing repetition-filtered blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        paged_model = PagedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        paged_model = PagedDocumentModel.model_validate_json(await downloader.readall())
+
     # LLM does its magic
     llm_client = CONFIG.llm.selected(
         is_fast=True,  # We will use the fast model
@@ -497,6 +493,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         logger.info(f"No facts detected, skipping")
         return
     logger.info(f"Generated {len(facts)} facts ({blob_name})")
+
     # Build model
     facted_document_model = FactedDocumentModel(
         chunk_content=paged_model.chunk_content,
@@ -511,6 +508,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         synthesis=paged_model.synthesis,
         title=paged_model.title,
     )
+
     # Store
     out_path = replace_root_path(
         replace_extension(blob_name, ".json"), FACT_FOLDER
@@ -537,12 +535,10 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing fact blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        facted_model = FactedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
-    # Filter facts
+        facted_model = FactedDocumentModel.model_validate_json(await downloader.readall())
+
+    # Score facts
     initial_fact_count = len(facted_model.facts)
     def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[float]]:
         if not req:
@@ -624,6 +620,8 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
             for fact in facted_model.facts
         ]
     )
+
+    # Filter facts
     kept_facts = []
     for i, fact_score in enumerate(fact_scores):
         if fact_score >= CONFIG.features.fact_score_threshold:  # Discard low quality facts
@@ -633,6 +631,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         logger.info(f"No facts left, skipping")
         return
     logger.info(f"Filtered to {len(facted_model.facts)}/{initial_fact_count} facts ({blob_name})")
+
     # Store
     out_path = replace_root_path(
         replace_extension(blob_name, ".json"), CRITIC_FOLDER
@@ -659,11 +658,9 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing fact blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        facted_model = FactedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        facted_model = FactedDocumentModel.model_validate_json(await downloader.readall())
+
     # Build indexed model
     indexed_models = [
         IndexedDocumentModel(
@@ -676,6 +673,7 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
         )
         for i, fact in enumerate(facted_model.facts)
     ]
+
     # Index
     destination_client = CONFIG.destination.instance()
     await destination_client.index(indexed_models)
