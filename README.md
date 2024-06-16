@@ -333,7 +333,7 @@ Features are documented in [features.py](helpers/config_models/features.py). The
 features:
   fact_iterations: 10
   fact_score_threshold: 0.5
-  page_split_size: 666
+  page_split_size: 2000
   sanitize_pdf_version: 1.5
 
 [...]
