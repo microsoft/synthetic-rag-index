@@ -13,7 +13,7 @@ from azure.storage.blob.aio import BlobClient, ContainerClient
 from azurefunctions.extensions.bindings.blob import BlobClient as BlobClientTrigger
 from os import getenv
 from pydantic import ValidationError
-from typing import Optional, TypeVar
+from typing import IO, Optional, TypeVar
 import asyncio
 import azure.functions as func
 import json
@@ -28,11 +28,12 @@ from helpers.models import (
     SynthetisedDocumentModel,
 )
 from base64 import b64encode
-from io import BytesIO
 from unidecode import unidecode
-import pikepdf
+import pymupdf
 import re
 from helpers.file import detect_extension, replace_root_path, replace_extension, hash_text, sanitize_text, has_excessive_repetition
+from tempfile import NamedTemporaryFile
+from os import remove
 
 
 # Azure Functions
@@ -51,7 +52,6 @@ SYNTHESIS_FOLDER = "3-synthesis"
 
 # Clients
 _container_client: Optional[ContainerClient] = None
-pikepdf.settings.set_flate_compression_level(9)  # Maximum compression level for PDFs
 
 # Custom types
 T = TypeVar("T")
@@ -66,14 +66,12 @@ T = TypeVar("T")
 async def raw_to_sanitize(input: BlobClientTrigger) -> None:
     """
     First, raw documents are sanitized to remove any sensitive information.
-
-    For PDF, QPDF (https://github.com/qpdf/qpdf) is used (from pikepdf) to save the document in a safe format.
     """
-    async def _upload(data: memoryview, in_path: str) -> None:
-        out_path = unidecode(replace_root_path(in_path, SANITIZE_FOLDER), replace_str="")  # Decode possible non ASCII characters
-        out_client = await _use_blob_client(out_path)
+    async def _upload(local_file: IO, remote_path: str) -> None:
+        remote_path = unidecode(replace_root_path(remote_path, SANITIZE_FOLDER), replace_str="")  # Decode possible non ASCII characters
+        out_client = await _use_blob_client(remote_path)
         await out_client.upload_blob(
-            data=data,
+            data=local_file,
             overwrite=True,  # For the first upload, overwrite, next steps will validate MD5 for cache
         )
 
@@ -82,41 +80,68 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
         name=input.blob_name,  # type: ignore
         snapshot=input.snapshot,  # type: ignore
     ) as blob_client:
-        blob_name = blob_client.blob_name
-        logger.info(f"Processing raw blob ({blob_name})")
-        downloader = await blob_client.download_blob()
-        in_bytes = BytesIO()
-        await downloader.readinto(in_bytes)
-    if detect_extension(blob_name) == ".pdf":  # Sanitize PDF
-        with pikepdf.open(in_bytes) as in_pdf:
-            logger.info(f"Sanitizing PDF from v{in_pdf.pdf_version} to v{CONFIG.features.sanitize_pdf_version} ({blob_name})")
-            doc_client = CONFIG.document_intelligence.instance()
-            for pages_numbers, i, files_count in doc_client.chunck(in_pdf.pages):
-                out_stream = BytesIO()
-                out_pdf = pikepdf.Pdf.new()
-                for pages_number in pages_numbers:  # Copy pages
-                    out_pdf.pages.append(in_pdf.pages[pages_number])
-                out_path = replace_extension(blob_name, f"-{i}.pdf")
-                logger.info(f"Saving PDF file {i + 1}/{files_count} ({out_path})")
-                # See: https://qpdf.readthedocs.io/en/stable/cli.html
-                out_pdf.save(
-                    deterministic_id=True,  # Deterministic document ID for caching
-                    filename_or_stream=out_stream,
-                    linearize=True,  # Allows compliant readers to begin displaying a PDF file before it is fully downloaded
-                    min_version=CONFIG.features.sanitize_pdf_version,  # Note, if a second PDF is created with a higher version, hash will be different and cache won't work
-                    object_stream_mode=pikepdf.ObjectStreamMode.generate,  # Generate object streams
-                    recompress_flate=True,  # Recompress with flate compression
+        in_remote_path = blob_client.blob_name
+        logger.info(f"Processing raw blob ({in_remote_path})")
+
+        with NamedTemporaryFile() as in_local_path:  # Temp file for source
+            # Download and save
+            downloader = await blob_client.download_blob()
+            await downloader.readinto(in_local_path)
+            in_local_path.seek(0)  # Reset file pointer
+
+            if detect_extension(in_remote_path) in {".pdf", ".xps", ".epub", ".mobi", ".fb2", ".cbz", ".svg", ".txt"}:  # Sanitize with PyMuPDF
+                logger.info(f"Sanitizing ({in_remote_path})")
+                doc_client = CONFIG.document_intelligence.instance()
+                # Open
+                in_pdf = pymupdf.open(in_local_path)
+                if not in_pdf.is_pdf:  # Convert to PDF
+                    in_pdf = pymupdf.open("pdf", in_pdf.convert_to_pdf())
+                # Sanitize
+                in_pdf.scrub(
+                    hidden_text=False,  # Keep hidden text (it may contain OCR)
+                    remove_links=False,  # Keep links (they are extracted later)
+                    reset_fields=False,  # Keep form fields (they are extracted later)
                 )
+
+                for pages_numbers, i, chuncks_count in doc_client.chunck(in_pdf.page_count):  # Iterate over chuncks
+                    out_remote_path = replace_extension(in_remote_path, f"-{i}.pdf")
+                    out_local_path = NamedTemporaryFile(delete=False)  # Temp file for destination
+                    out_local_path.close()  # Close to allow pymupdf to open it later
+                    logger.info(f"Saving PDF file {i + 1}/{chuncks_count} ({out_remote_path})")
+
+                    # Create new PDF and insert selected pages
+                    out_pdf = pymupdf.Document()
+                    for pages_number in pages_numbers:
+                        out_pdf.insert_pdf(in_pdf, from_page=pages_number, to_page=pages_number)
+
+                    # Save and optimize
+                    out_pdf.save(
+                        out_local_path.name,
+                        appearance=True,  # Annotate buttons, form fields, and links
+                        clean=True,  # Clean and sanitize content streams
+                        compression_effort=100,  # Maximum compression
+                        deflate_fonts=True,  # Compress uncompressed fonts
+                        deflate_images=True,  # Compress uncompressed images
+                        deflate=True,  # Compress uncompressed streams
+                        garbage=4,  # Remove unused objects
+                        linear=True,  # Linearize the PDF for fast web view
+                        preserve_metadata=True,  # Preserve original metadata
+                    )
+
+                    # Upload
+                    with open(out_local_path.name, "rb") as out_local_path:
+                        await _upload(
+                            local_file=out_local_path,
+                            remote_path=out_remote_path,
+                        )
+                    remove(out_local_path.name)  # Clean-up
+
+            else:  # Store as is
+                logger.info(f"Saving raw blob as is ({in_remote_path})")
                 await _upload(
-                    data=out_stream.getbuffer(),
-                    in_path=out_path,
+                    local_file=in_local_path,
+                    remote_path=in_remote_path,
                 )
-    else:  # Store as is
-        logger.info(f"Saving raw blob as is ({blob_name})")
-        await _upload(
-            data=out_stream.getbuffer(),
-            in_path=blob_name,
-        )
 
 
 @app.blob_trigger(
@@ -134,38 +159,56 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
         name=input.blob_name,  # type: ignore
         snapshot=input.snapshot,  # type: ignore
     ) as blob_client:
-        blob_name = blob_client.blob_name
+        in_remote_path = blob_client.blob_name
         blob_properties: BlobProperties = await blob_client.get_blob_properties()
         blob_md5 = b64encode(blob_properties.content_settings.content_md5).hex()  # See: https://github.com/Azure/azure-sdk-for-python/issues/13104#issuecomment-678033167
-        logger.info(f"Processing raw blob ({blob_name})")
-        downloader = await blob_client.download_blob()
-        content = await downloader.readall()  # TODO: Use stream (files can be large)
-    # Analyze document
-    doc_client = CONFIG.document_intelligence.instance()
-    content, title, langs = await doc_client.analyze(
-        document=content,
-        file_name=blob_name,
-    )
-    # Clean content
-    content = sanitize_text(content)
-    if not content:
-        logger.warning(f"Content skipped ({blob_name})")
-        return
-    raw_text_model = ExtractedDocumentModel(
-        document_content=content,
-        file_md5=blob_md5,
-        file_path=blob_name,
-        format="markdown",
-        langs=langs,
-        title=title,
-    )
-    # Store
-    out_path = f"{EXTRACT_FOLDER}/{blob_md5}.json"
-    out_client = await _use_blob_client(out_path)
-    try:
-        await out_client.upload_blob(data=raw_text_model.model_dump_json())
-    except ResourceExistsError:
-        logger.info(f"Document already exists, skipping ({out_path})")
+        logger.info(f"Processing raw blob ({in_remote_path})")
+
+        with NamedTemporaryFile() as in_local_path:  # Temp file for source
+            # Download and save
+            downloader = await blob_client.download_blob()
+            await downloader.readinto(in_local_path)
+            in_local_path.seek(0)  # Reset file pointer
+            doc_client = CONFIG.document_intelligence.instance()
+
+            if detect_extension(in_remote_path) in doc_client.compatible_formats():  # Analyze document
+                logger.info(f"Extracting content with Document Intelligence ({in_remote_path})")
+                content, title, langs = await doc_client.analyze(
+                    document=in_local_path.file,
+                    file_name=in_remote_path,
+                )
+                format = "markdown"
+                # Clean content
+                content = sanitize_text(content)
+
+            else:  # Store as is
+                logger.info(f"Extracting binary content ({in_remote_path})")
+                with open(in_local_path.name, "rb") as in_local_path:
+                    content = in_local_path.read().decode("utf-8")
+                    format = "raw"
+                    langs = None
+                    title = None
+
+        # Build model
+        if not content:
+            logger.warning(f"Content skipped ({in_remote_path})")
+            return
+        raw_text_model = ExtractedDocumentModel(
+            document_content=content,
+            file_md5=blob_md5,
+            file_path=in_remote_path,
+            format=format,
+            langs=langs,
+            title=title,
+        )
+
+        # Store
+        out_path = f"{EXTRACT_FOLDER}/{blob_md5}.json"
+        out_client = await _use_blob_client(out_path)
+        try:
+            await out_client.upload_blob(data=raw_text_model.model_dump_json())
+        except ResourceExistsError:
+            logger.info(f"Document already exists, skipping ({out_path})")
 
 
 @app.blob_trigger(
@@ -186,17 +229,16 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing extracted blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        extracted_model = ExtractedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        extracted_model = ExtractedDocumentModel.model_validate_json(await downloader.readall())
+
     # Prepare chunks for LLM
     llm_client = CONFIG.llm.selected(
         is_fast=False,  # We will use the slow model next step
     ).instance()
     chuncks = llm_client.chunck(text=extracted_model.document_content)
     logger.info(f"Splited to {len(chuncks)} chuncks ({blob_name})")
+
     # Store
     for i, chunck in enumerate(chuncks):  # TODO: Make this async
         out_model = ChunkedDocumentModel(
@@ -237,11 +279,9 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing chuncked blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        chuncked_model = ChunkedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        chuncked_model = ChunkedDocumentModel.model_validate_json(await downloader.readall())
+
     # LLM does its magic
     def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[str]]:
         if not req:
@@ -290,6 +330,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         {chuncked_model.chunk_content}
         """,  # TODO: Add at least 5 examples for different contexts
     )
+
     # Build model
     synthesis_model = SynthetisedDocumentModel(
         chunk_content=chuncked_model.chunk_content,
@@ -301,6 +342,7 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         synthesis=synthesis_str,
         title=chuncked_model.title,
     )
+
     # Store
     out_path = replace_root_path(
         replace_extension(blob_name, ".json"), SYNTHESIS_FOLDER
@@ -332,11 +374,9 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing synthesis blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        synthesis_model = SynthetisedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        synthesis_model = SynthetisedDocumentModel.model_validate_json(await downloader.readall())
+
     # Prepare chunks for LLM
     llm_client = CONFIG.llm.selected(
         is_fast=True,  # We will use the fast model
@@ -346,6 +386,7 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         text=synthesis_model.chunk_content,
     )
     logger.info(f"Splited to {len(pages)} pages ({blob_name})")
+
     # Store
     for i, page in enumerate(pages):  # TODO: Make this async
         # Filter-out pages with excessive repetition
@@ -393,11 +434,9 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing repetition-filtered blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        paged_model = PagedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        paged_model = PagedDocumentModel.model_validate_json(await downloader.readall())
+
     # LLM does its magic
     llm_client = CONFIG.llm.selected(
         is_fast=True,  # We will use the fast model
@@ -456,6 +495,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         logger.info(f"No facts detected, skipping")
         return
     logger.info(f"Generated {len(facts)} facts ({blob_name})")
+
     # Build model
     facted_document_model = FactedDocumentModel(
         chunk_content=paged_model.chunk_content,
@@ -470,6 +510,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
         synthesis=paged_model.synthesis,
         title=paged_model.title,
     )
+
     # Store
     out_path = replace_root_path(
         replace_extension(blob_name, ".json"), FACT_FOLDER
@@ -496,12 +537,10 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing fact blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        facted_model = FactedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
-    # Filter facts
+        facted_model = FactedDocumentModel.model_validate_json(await downloader.readall())
+
+    # Score facts
     initial_fact_count = len(facted_model.facts)
     def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[float]]:
         if not req:
@@ -583,6 +622,8 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
             for fact in facted_model.facts
         ]
     )
+
+    # Filter facts
     kept_facts = []
     for i, fact_score in enumerate(fact_scores):
         if fact_score >= CONFIG.features.fact_score_threshold:  # Discard low quality facts
@@ -592,6 +633,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         logger.info(f"No facts left, skipping")
         return
     logger.info(f"Filtered to {len(facted_model.facts)}/{initial_fact_count} facts ({blob_name})")
+
     # Store
     out_path = replace_root_path(
         replace_extension(blob_name, ".json"), CRITIC_FOLDER
@@ -618,11 +660,9 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
         blob_name = blob_client.blob_name
         logger.info(f"Processing fact blob ({blob_name})")
         downloader = await blob_client.download_blob()
-        content = await downloader.readall()
         # Deserialize
-        facted_model = FactedDocumentModel.model_validate_json(content)
-        # Free up memory
-        del content
+        facted_model = FactedDocumentModel.model_validate_json(await downloader.readall())
+
     # Build indexed model
     indexed_models = [
         IndexedDocumentModel(
@@ -635,6 +675,7 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
         )
         for i, fact in enumerate(facted_model.facts)
     ]
+
     # Index
     destination_client = CONFIG.destination.instance()
     await destination_client.index(indexed_models)

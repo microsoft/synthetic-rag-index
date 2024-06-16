@@ -2,9 +2,6 @@ from pydantic import BaseModel, Field
 
 
 class FeaturesModel(BaseModel):
-    sanitize_pdf_version: bool = Field(
-        default="1.5",  # v1.5 allows JPEG 2000 which can reduce file size by 50%
-    )
     fact_iterations: int = Field(
         default=10,
         ge=1,
