@@ -12,6 +12,6 @@ class FeaturesModel(BaseModel):
         le=1,
     )
     page_split_size: int = Field(
-        default=int(100 / 75 * 500),  # 100 tokens ~= 75 words, ~500 words per page for a dense book
+        default=int(100/75*500*3),  # 100 tokens ~= 75 words, ~500 words per page for a dense English book, 3 pages
         ge=0,
     )
