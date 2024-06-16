@@ -61,12 +61,31 @@ graph LR
 
 ### Format support
 
-Document extraction is based on Azure Document Intelligence, specifically on the `prebuilt-layout` model. It [supports the following](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-layout?view=doc-intel-4.0.0&tabs=sample-code#input-requirements) formats:
+Document extraction is based on Azure Document Intelligence, specifically on the `prebuilt-layout` model. It [supports popular formats](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-layout?view=doc-intel-4.0.0&tabs=sample-code#input-requirements).
 
-- HTML
-- Images: JPEG/JPG, PNG, BMP, TIFF, HEIF
-- Microsoft Office: Word (DOCX), Excel (XLSX), PowerPoint (PPTX)
-- PDF
+Some formats are first converted to PDF [with MuPDF](https://github.com/ArtifexSoftware/mupdf) to ensure compatibility with Document Intelligence.
+
+> [!IMPORTANT]
+> Formats not listed there are treated as binary and decoded with `UTF-8` encoding.
+
+| `Format` | **OCR** | **Details** |
+|-|-|-|
+| `.bmp` | ✅ | |
+| `.cbz` | ✅ | First converted to PDF with MuPDF. |
+| `.docx` | ✅ | |
+| `.epub` | ✅ | First converted to PDF with MuPDF. |
+| `.fb2` | ✅ | First converted to PDF with MuPDF. |
+| `.heif` | ✅ | |
+| `.html` | ✅ | |
+| `.jpg`, `.jpeg` | ✅ | |
+| `.mobi` | ✅ | First converted to PDF with MuPDF. |
+| `.pdf` | ✅ | Sanitized & compressed with MuPDF. |
+| `.png` | ✅ | |
+| `.pptx` | ✅ | |
+| `.svg` | ✅ | First converted to PDF with MuPDF. |
+| `.tiff` | ✅ | |
+| `.xlsx` | ✅ | |
+| `.xps` | ✅ | First converted to PDF with MuPDF. |
 
 ### Demo
 

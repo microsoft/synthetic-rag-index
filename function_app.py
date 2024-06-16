@@ -89,11 +89,13 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
             await downloader.readinto(in_local_path)
             in_local_path.seek(0)  # Reset file pointer
 
-            if detect_extension(in_remote_path) == ".pdf":  # Sanitize PDF
-                logger.info(f"Sanitizing PDF ({in_remote_path})")
+            if detect_extension(in_remote_path) in {".pdf", ".xps", ".epub", ".mobi", ".fb2", ".cbz", ".svg", ".txt"}:  # Sanitize with PyMuPDF
+                logger.info(f"Sanitizing ({in_remote_path})")
                 doc_client = CONFIG.document_intelligence.instance()
                 # Open
                 in_pdf = pymupdf.open(in_local_path)
+                if not in_pdf.is_pdf:  # Convert to PDF
+                    in_pdf = pymupdf.open("pdf", in_pdf.convert_to_pdf())
                 # Sanitize
                 in_pdf.scrub(
                     hidden_text=False,  # Keep hidden text (it may contain OCR)
