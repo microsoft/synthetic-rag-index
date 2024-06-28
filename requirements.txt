@@ -7,7 +7,7 @@ azure-monitor-opentelemetry==1.4.2
 azure-search-documents==11.6.0b3
 azurefunctions-extensions-bindings-blob==1.0.0b1
 nltk==3.8.1
-openai==1.30.3
+openai==1.35.7
 opentelemetry-instrumentation-aiohttp-client==0.46b0
 opentelemetry-instrumentation-httpx==0.46b0
 opentelemetry-instrumentation-openai==0.21.4
