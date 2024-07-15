@@ -3,8 +3,8 @@
 Service to import data from various sources (e.g. PDF, images, Microsoft Office, HTML) and index it in AI Search. Increases data relevance and reduces final size by 90%+. Useful for RAG scenarios with LLM. Hosted in Azure with serverless architecture.
 
 <!-- github.com badges -->
-[![Last release date](https://img.shields.io/github/release-date/clemlesne/call-center-ai)](https://github.com/clemlesne/call-center-ai/releases)
-[![Project license](https://img.shields.io/github/license/clemlesne/call-center-ai)](https://github.com/clemlesne/call-center-ai/blob/main/LICENSE)
+[![Last release date](https://img.shields.io/github/release-date/clemlesne/synthetic-rag-index)](https://github.com/clemlesne/synthetic-rag-index/releases)
+[![Project license](https://img.shields.io/github/license/clemlesne/synthetic-rag-index)](https://github.com/clemlesne/synthetic-rag-index/blob/main/LICENSE)
 
 ## Overview
 
