@@ -34,19 +34,27 @@ upgrade:
 		pyproject.toml
 
 test:
-	@echo "➡️ Running Black..."
+	@echo "➡️ Test generic formatter (Black)..."
 	python3 -m black --check .
 
-	@echo "➡️ Running deptry..."
-	python3 -m deptry \
-		--ignore-notebooks \
-		--per-rule-ignores "DEP002=aiohttp" \
-		--per-rule-ignores "DEP003=aiohttp_retry" \
-		.
+	@echo "➡️ Test import formatter (isort)..."
+	python3 -m isort --jobs -1 --check .
+
+	@echo "➡️ Test dependencies issues (deptry)..."
+	python3 -m deptry .
+
+	@echo "➡️ Test code smells (Pylint)..."
+	python3 -m pylint .
+
+	@echo "➡️ Test types (Pyright)..."
+	python3 -m pyright .
 
 lint:
-	@echo "➡️ Running Black..."
+	@echo "➡️ Fix with generic formatter (Black)..."
 	python3 -m black .
+
+	@echo "➡️ Fix with import formatter (isort)..."
+	python3 -m isort --jobs -1 .
 
 dev:
 	VERSION=$(version_full) func start
