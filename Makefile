@@ -9,19 +9,29 @@ version-full:
 	@bash ./cicd/version/version.sh -g . -c -m
 
 install:
-	@for f in $$(find . -name "requirements*.txt"); do \
-		echo "➡️ Installing Python dependencies in $$f..."; \
-		python3 -m pip install -r $$f; \
-	done
+	@echo "➡️ Installing pip-tools..."
+	python3 -m pip install pip-tools
+
+	@echo "➡️ Syncing dependencies..."
+	pip-sync --pip-args "--no-deps" requirements-dev.txt
 
 upgrade:
 	@echo "➡️ Upgrading pip..."
-	python3 -m pip install --upgrade pip
+	python3 -m pip install --upgrade pip setuptools wheel
 
-	@for f in $$(find . -name "requirements*.txt"); do \
-		echo "➡️ Upgrading Python dependencies in $$f..."; \
-		python3 -m pip install --upgrade -r $$f; \
-	done
+	@echo "➡️ Upgrading pip-tools..."
+	python3 -m pip install --upgrade pip-tools
+
+	@echo "➡️ Compiling app requirements..."
+	pip-compile \
+		--output-file requirements.txt \
+		pyproject.toml
+
+	@echo "➡️ Compiling dev requirements..."
+	pip-compile \
+		--extra dev \
+		--output-file requirements-dev.txt \
+		pyproject.toml
 
 test:
 	@echo "➡️ Running Black..."
