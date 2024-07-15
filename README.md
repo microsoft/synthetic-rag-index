@@ -6,6 +6,9 @@ Service to import data from various sources (e.g. PDF, images, Microsoft Office,
 [![Last release date](https://img.shields.io/github/release-date/clemlesne/synthetic-rag-index)](https://github.com/clemlesne/synthetic-rag-index/releases)
 [![Project license](https://img.shields.io/github/license/clemlesne/synthetic-rag-index)](https://github.com/clemlesne/synthetic-rag-index/blob/main/LICENSE)
 
+<!-- GitHub Codespaces badge -->
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/microsoft/synthetic-rag-index?quickstart=1)
+
 ## Overview
 
 In a real-world scenario, with a public corpus of 15M characters (222 PDF, 7.330 pages), 2.940 facts were generated (8.41 MB indexed). That's a 93% reduction in document amount compared to the chunck method (48.111 chuncks, 300 characters each).
@@ -241,7 +244,17 @@ Cost:
 
 ## Local installation
 
-### Prerequisites
+Some prerequisites are needed to deploy the solution.
+
+[Prefer using GitHub Codespaces for a quick start.](https://codespaces.new/microsoft/synthetic-rag-index?quickstart=1) The environment will setup automatically with all the required tools.
+
+In macOS, with [Homebrew](https://brew.sh), simply type `make brew`.
+
+For other systems, make sure you have the following installed:
+
+- Bash compatible shell, like `bash` or `zsh`
+- Make, `apt install make` (Ubuntu), `yum install make` (CentOS), `brew install make` (macOS)
+- [Azure Functions Core Tools](https://github.com/Azure/azure-functions-core-tools?tab=readme-ov-file#installing)
 
 Place a file called `config.yaml` in the root of the project with the following content:
 

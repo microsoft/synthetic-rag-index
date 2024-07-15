@@ -10,3 +10,8 @@ updates:
     target-branch: develop
     schedule:
       interval: daily
+  - package-ecosystem: "devcontainers"
+    directory: ""
+    target-branch: develop
+    schedule:
+      interval: weekly
