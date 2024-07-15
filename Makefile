@@ -8,6 +8,13 @@ version:
 version-full:
 	@bash ./cicd/version/version.sh -g . -c -m
 
+brew:
+	@echo "➡️ Installing Azure Functions Core Tools..."
+	brew tap azure/functions && brew install azure-functions-core-tools@4
+
+	@echo "➡️ Installing Syft..."
+	brew install syft
+
 install:
 	@echo "➡️ Installing pip-tools..."
 	python3 -m pip install pip-tools
@@ -58,3 +65,10 @@ lint:
 
 dev:
 	VERSION=$(version_full) func start
+
+sbom:
+	@echo "🔍 Generating SBOM..."
+	syft scan \
+		--source-version $(version_full)  \
+		--output spdx-json=./sbom-reports/$(version_full).json \
+		.

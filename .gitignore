@@ -745,3 +745,6 @@ config*.yaml
 
 # Test reports
 test-reports/
+
+# SBOM reports
+sbom-reports/
