@@ -1,7 +1,7 @@
-from aiohttp import ClientSession, DummyCookieJar, ClientTimeout
-from azure.core.pipeline.transport._aiohttp import AioHttpTransport
 from typing import Optional
 
+from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
+from azure.core.pipeline.transport._aiohttp import AioHttpTransport
 
 _cookie_jar: Optional[DummyCookieJar] = None
 _session: Optional[ClientSession] = None

@@ -1,6 +1,8 @@
 from functools import cache
+
+from pydantic import BaseModel, Field, SecretStr
+
 from persistence.ianalyze import IAnalyze
-from pydantic import Field, SecretStr, BaseModel
 
 
 class DocumentIntelligenceModel(BaseModel, frozen=True):

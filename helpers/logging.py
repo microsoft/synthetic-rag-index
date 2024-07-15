@@ -1,11 +1,12 @@
+from logging import basicConfig, getLogger
+from os import environ, getenv
+
 from azure.monitor.opentelemetry import configure_azure_monitor
-from helpers.config import CONFIG
-from logging import getLogger, basicConfig
 from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.openai import OpenAIInstrumentor
-from os import getenv, environ
 
+from helpers.config import CONFIG
 
 APP_NAME = "synthetic-rag-index"
 

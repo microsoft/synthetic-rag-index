@@ -1,6 +1,7 @@
-from datetime import datetime, UTC
-from pydantic import BaseModel, Field
+from datetime import UTC, datetime
 from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class AbstractdDocumentModel(BaseModel):
@@ -29,6 +30,7 @@ class SynthetisedDocumentModel(ChunkedDocumentModel):
     """
     Third, chunks are synthesised into a coherent text.
     """
+
     # Editable fields
     synthesis: str
 
@@ -61,6 +63,7 @@ class FactedDocumentModel(FactedLlmModel, PagedDocumentModel):
     """
     Fourth, facts are synthetises from the synthesised text.
     """
+
     pass
 
 
@@ -68,6 +71,7 @@ class IndexedDocumentModel(BaseModel):
     """
     Last, the document is indexed to be searchable by the user.
     """
+
     # Immutable fields
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), frozen=True)
     id: str = Field(frozen=True)

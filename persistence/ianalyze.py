@@ -19,7 +19,9 @@ class IAnalyze(ABC):
         pass
 
     @abstractmethod
-    def chunck(self, pages_count: int) -> Generator[tuple[list[int], int, int], None, None]:
+    def chunck(
+        self, pages_count: int
+    ) -> Generator[tuple[list[int], int, int], None, None]:
         """
         Split the pages into chunks of the maximum size allowed by the service.
 

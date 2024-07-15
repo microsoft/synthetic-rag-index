@@ -12,9 +12,9 @@ In a real-world scenario, with a public corpus of 15M characters (222 PDF, 7.330
 
 It includes principles taken from research papers:
 
-1. Repetition removal (https://arxiv.org/abs/2112.11446)
-2. Corpus cleaning (https://arxiv.org/abs/1910.10683)
-3. Synthetic data generation (https://huggingface.co/spaces/HuggingFaceFW/blogpost-fineweb-v1)
+1. Repetition removal (<https://arxiv.org/abs/2112.11446>)
+2. Corpus cleaning (<https://arxiv.org/abs/1910.10683>)
+3. Synthetic data generation (<https://huggingface.co/spaces/HuggingFaceFW/blogpost-fineweb-v1>)
 
 Funcional workflow is as follows:
 

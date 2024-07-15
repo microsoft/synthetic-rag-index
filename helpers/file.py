@@ -1,7 +1,9 @@
-from helpers.logging import logger
-from typing import Optional
 import hashlib
+from typing import Optional
+
 import nltk
+
+from helpers.logging import logger
 
 
 def detect_extension(file_path: str) -> str:

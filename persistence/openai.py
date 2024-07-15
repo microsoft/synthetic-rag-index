@@ -1,14 +1,15 @@
+import math
 from abc import abstractmethod
+from typing import Callable, Optional, TypeVar, Union
+
+import tiktoken
 from azure.identity import ManagedIdentityCredential, get_bearer_token_provider
-from helpers.config_models.llm import AzureOpenaiPlatformModel, OpenaiPlatformModel
-from helpers.logging import logger
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 from openai.types.chat import ChatCompletionSystemMessageParam
-from persistence.illm import ILlm
-from typing import Optional, TypeVar, Callable, Union
-import math
-import tiktoken
 
+from helpers.config_models.llm import AzureOpenaiPlatformModel, OpenaiPlatformModel
+from helpers.logging import logger
+from persistence.illm import ILlm
 
 T = TypeVar("T")
 
@@ -23,8 +24,10 @@ class AbstractOpenaiLlm(ILlm):
     async def generate(
         self,
         prompt: str,
-        res_object: type[T],
-        validation_callback: Callable[[Optional[str]], tuple[bool, Optional[str], Optional[T]]],
+        res_type: type[T],
+        validation_callback: Callable[
+            [Optional[str]], tuple[bool, Optional[str], Optional[T]]
+        ],
         max_tokens: Optional[int] = None,
         temperature: float = 0,
         validate_json: bool = False,
@@ -82,11 +85,13 @@ class AbstractOpenaiLlm(ILlm):
             if _retries_remaining == 0:
                 logger.error(f"LLM validation error: {validation_error}")
                 return None
-            logger.warning(f"LLM validation error, retrying ({_retries_remaining} retries left)")
+            logger.warning(
+                f"LLM validation error, retrying ({_retries_remaining} retries left)"
+            )
             return await self.generate(
                 max_tokens=max_tokens,
                 prompt=prompt,
-                res_object=res_object,
+                res_type=res_type,
                 temperature=temperature,
                 validate_json=validate_json,
                 validation_callback=validation_callback,
@@ -115,9 +120,11 @@ class AbstractOpenaiLlm(ILlm):
         contents = []
         max_chars = int(1048576 * 0.9)  # REST API has a limit of 1MB, with a 10% margin
         if not max_tokens:  # For simplicity, we count tokens with a 20% marginμ
-            max_tokens=int(self._config.context * 0.8)
+            max_tokens = int(self._config.context * 0.8)
 
-        if self.count_tokens(text) < max_tokens and len(text) < max_chars:  # If the text is small enough
+        if (
+            self.count_tokens(text) < max_tokens and len(text) < max_chars
+        ):  # If the text is small enough
             contents.append(text)
             return contents
 
@@ -170,6 +177,7 @@ class AbstractOpenaiLlm(ILlm):
 
             As the headings are only on the first chunk, we re-apply them to all the others.
             """
+
             def _rebuild_headings() -> str:
                 res = ""
                 if h1_head:
@@ -188,13 +196,26 @@ class AbstractOpenaiLlm(ILlm):
                 if not previous_line.startswith("#"):
                     break
                 to_remove += 1
-            current_cleaned = "\n".join(current_chunk.splitlines()[:-(to_remove + 1)]).strip()
+            current_cleaned = "\n".join(
+                current_chunk.splitlines()[: -(to_remove + 1)]
+            ).strip()
 
             # Chunck if is still too big
-            current_cleaned_count = math.ceil(max(self.count_tokens(current_cleaned) / max_tokens, len(current_cleaned) / max_chars))
-            current_cleaned_chunck_size = math.ceil(len(current_cleaned) / current_cleaned_count)
+            current_cleaned_count = math.ceil(
+                max(
+                    self.count_tokens(current_cleaned) / max_tokens,
+                    len(current_cleaned) / max_chars,
+                )
+            )
+            current_cleaned_chunck_size = math.ceil(
+                len(current_cleaned) / current_cleaned_count
+            )
             for i in range(current_cleaned_count):  # Iterate over the chunks
-                chunck_content = current_cleaned[i*current_cleaned_chunck_size:(i+1)*current_cleaned_chunck_size]
+                chunck_content = current_cleaned[
+                    i
+                    * current_cleaned_chunck_size : (i + 1)
+                    * current_cleaned_chunck_size
+                ]
                 if i == 0:  # Headings only on the first chunk
                     contents.append(chunck_content)
                 else:  # Re-apply the last heading to the next chunk
@@ -217,16 +238,27 @@ class AbstractOpenaiLlm(ILlm):
                     if last_h3_head:
                         current_chunk += f"### {last_h3_head}\n"
                     for h4_head, h4_content in h3_next.items():
-                        if self.count_tokens(current_chunk) >= max_tokens or len(current_chunk) >= max_chars:  # If the chunk is too big
+                        if (
+                            self.count_tokens(current_chunk) >= max_tokens
+                            or len(current_chunk) >= max_chars
+                        ):  # If the chunk is too big
                             # Re-apply the last heading to the next chunk
-                            current_chunk = _split_paragraph(contents, current_chunk, last_h1_head, last_h2_head, last_h3_head)
+                            current_chunk = _split_paragraph(
+                                contents,
+                                current_chunk,
+                                last_h1_head,
+                                last_h2_head,
+                                last_h3_head,
+                            )
                         if h4_content:
                             if h4_head:
                                 current_chunk += f"#### {h4_head}\n"
                             current_chunk += h4_content + "\n"
         # Add the last chunk
         if current_chunk:
-            _split_paragraph(contents, current_chunk, last_h1_head, last_h2_head, last_h3_head)
+            _split_paragraph(
+                contents, current_chunk, last_h1_head, last_h2_head, last_h3_head
+            )
 
         # Return the chunks
         return contents
@@ -242,7 +274,11 @@ class AzureOpenaiLlm(AbstractOpenaiLlm):
 
     def _use_client(self) -> AsyncAzureOpenAI:
         if not self._client:
-            api_key = self._config.api_key.get_secret_value() if self._config.api_key else None
+            api_key = (
+                self._config.api_key.get_secret_value()
+                if self._config.api_key
+                else None
+            )
             token_func = (
                 get_bearer_token_provider(
                     ManagedIdentityCredential(),
