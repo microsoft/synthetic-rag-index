@@ -1,0 +1,76 @@
+[project]
+description = "Service to import data from various sources and index it in AI Search. "
+dynamic = ["version"]
+license = {file = "LICENSE"}
+name = "synthetic-rag-index"
+readme = "README.md"
+requires-python = "==3.11"
+dependencies = [
+  "aiohttp==3.9.5",  # Async HTTP client for Azure
+  "azure-ai-documentintelligence==1.0.0b3",  # Azure AI Document Intelligence
+  "azure-functions==1.19.0",  # Azure Functions
+  "azure-identity==1.16.0",  # Azure Identity library
+  "azure-monitor-opentelemetry==1.4.2",  # Azure Monitor OpenTelemetry
+  "azure-search-documents==11.6.0b3",  # Azure Search Documents
+  "azurefunctions-extensions-bindings-blob==1.0.0b1",  # Azure Functions Extensions Bindings Blob
+  "nltk==3.8.1",  # NLP toolkit
+  "openai==1.30.3",  # OpenAI client
+  "opentelemetry-instrumentation-aiohttp-client==0.46b0",  # OpenTelemetry instrumentation for aiohttp client
+  "opentelemetry-instrumentation-httpx==0.46b0",  # OpenTelemetry instrumentation for HTTPX
+  "opentelemetry-instrumentation-openai==0.21.4",  # OpenTelemetry instrumentation for OpenAI
+  "pydantic-settings==2.2.1",  # Application configuration management with Pydantic
+  "pydantic==2.7.1",  # Data serialization and validation
+  "pymupdf==1.24.5",  # PDF parsing and rendering library
+  "python-dotenv==1.0.1",  # Load environment variables from .env file
+  "pyyaml==6.0.1",  # YAML parser and emitter
+  "tiktoken==0.7.0",  # Tokenization library for OpenAI models
+  "unidecode==1.3.8"  # Unicode text normalization library
+]
+
+[project.optional-dependencies]
+dev = [
+  "black[jupyter]==24.4.2",  # Code formatter
+  "deptry==0.16.1",  # Dependency tree testing
+  "isort==5.13.2",  # Import sorter
+  "pip-tools==7.4.1",  # Compile requirements.txt from pyproject.toml
+  "pylint==3.2.5",  # Linter
+  "pyright==1.1.371",  # Static type checker
+]
+
+[tool.setuptools]
+py-modules = [
+  "helpers",
+  "persistence",
+]
+
+[tool.pip-tools]
+allow-unsafe = true
+generate-hashes = true
+
+[tool.deptry]
+ignore_notebooks = true
+pep621_dev_dependency_groups = ["dev"]
+
+[tool.black]
+target-version = ["py311"]
+
+[tool.isort]
+combine_as_imports = true
+profile = "black"
+skip_gitignore = true
+
+[tool.pylint.MAIN]
+fail-under = 8.0
+ignore-paths = [
+  ".venv/.+",  # Python virtual environment
+]
+init-hook='import sys; sys.path.append(".")'
+jobs = 0
+py-version = "3.11"
+recursive = true
+
+[tool.pylint.format]
+max-line-length = "88"
+
+[tool.pyright]
+pythonVersion = "3.11"

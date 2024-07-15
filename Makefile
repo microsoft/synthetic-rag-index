@@ -8,35 +8,67 @@ version:
 version-full:
 	@bash ./cicd/version/version.sh -g . -c -m
 
+brew:
+	@echo "➡️ Installing Azure Functions Core Tools..."
+	brew tap azure/functions && brew install azure-functions-core-tools@4
+
+	@echo "➡️ Installing Syft..."
+	brew install syft
+
 install:
-	@for f in $$(find . -name "requirements*.txt"); do \
-		echo "➡️ Installing Python dependencies in $$f..."; \
-		python3 -m pip install -r $$f; \
-	done
+	@echo "➡️ Installing pip-tools..."
+	python3 -m pip install pip-tools
+
+	@echo "➡️ Syncing dependencies..."
+	pip-sync --pip-args "--no-deps" requirements-dev.txt
 
 upgrade:
 	@echo "➡️ Upgrading pip..."
-	python3 -m pip install --upgrade pip
+	python3 -m pip install --upgrade pip setuptools wheel
 
-	@for f in $$(find . -name "requirements*.txt"); do \
-		echo "➡️ Upgrading Python dependencies in $$f..."; \
-		python3 -m pip install --upgrade -r $$f; \
-	done
+	@echo "➡️ Upgrading pip-tools..."
+	python3 -m pip install --upgrade pip-tools
+
+	@echo "➡️ Compiling app requirements..."
+	pip-compile \
+		--output-file requirements.txt \
+		pyproject.toml
+
+	@echo "➡️ Compiling dev requirements..."
+	pip-compile \
+		--extra dev \
+		--output-file requirements-dev.txt \
+		pyproject.toml
 
 test:
-	@echo "➡️ Running Black..."
+	@echo "➡️ Test generic formatter (Black)..."
 	python3 -m black --check .
 
-	@echo "➡️ Running deptry..."
-	python3 -m deptry \
-		--ignore-notebooks \
-		--per-rule-ignores "DEP002=aiohttp" \
-		--per-rule-ignores "DEP003=aiohttp_retry" \
-		.
+	@echo "➡️ Test import formatter (isort)..."
+	python3 -m isort --jobs -1 --check .
+
+	@echo "➡️ Test dependencies issues (deptry)..."
+	python3 -m deptry .
+
+	@echo "➡️ Test code smells (Pylint)..."
+	python3 -m pylint .
+
+	@echo "➡️ Test types (Pyright)..."
+	python3 -m pyright .
 
 lint:
-	@echo "➡️ Running Black..."
+	@echo "➡️ Fix with generic formatter (Black)..."
 	python3 -m black .
+
+	@echo "➡️ Fix with import formatter (isort)..."
+	python3 -m isort --jobs -1 .
 
 dev:
 	VERSION=$(version_full) func start
+
+sbom:
+	@echo "🔍 Generating SBOM..."
+	syft scan \
+		--source-version $(version_full)  \
+		--output spdx-json=./sbom-reports/$(version_full).json \
+		.

@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional, TypeVar, Callable
-
+from typing import Callable, Optional, TypeVar
 
 T = TypeVar("T")
 
@@ -10,8 +9,10 @@ class ILlm(ABC):
     async def generate(
         self,
         prompt: str,
-        res_object: type[T],
-        validation_callback: Callable[[Optional[str]], tuple[bool, Optional[str], Optional[T]]],
+        res_type: type[T],
+        validation_callback: Callable[
+            [Optional[str]], tuple[bool, Optional[str], Optional[T]]
+        ],
         max_tokens: Optional[int] = None,
         temperature: float = 0,
         validate_json: bool = False,

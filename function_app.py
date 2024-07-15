@@ -1,22 +1,37 @@
 # First imports, to make sure the following logs are first
 from helpers.config import CONFIG
-from helpers.logging import logger, APP_NAME
-
+from helpers.logging import APP_NAME, logger
 
 logger.info(f"{APP_NAME} v{CONFIG.version}")
 
+
+import asyncio
+import json
+import re
+from base64 import b64encode
+from os import getenv, remove
+from tempfile import NamedTemporaryFile
+from typing import IO, Optional, TypeVar
+
+import azure.functions as func
+import pymupdf
 
 # General imports
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobProperties
 from azure.storage.blob.aio import BlobClient, ContainerClient
 from azurefunctions.extensions.bindings.blob import BlobClient as BlobClientTrigger
-from os import getenv
 from pydantic import ValidationError
-from typing import IO, Optional, TypeVar
-import asyncio
-import azure.functions as func
-import json
+from unidecode import unidecode
+
+from helpers.file import (
+    detect_extension,
+    has_excessive_repetition,
+    hash_text,
+    replace_extension,
+    replace_root_path,
+    sanitize_text,
+)
 from helpers.models import (
     ChunkedDocumentModel,
     ExtractedDocumentModel,
@@ -27,14 +42,6 @@ from helpers.models import (
     PagedDocumentModel,
     SynthetisedDocumentModel,
 )
-from base64 import b64encode
-from unidecode import unidecode
-import pymupdf
-import re
-from helpers.file import detect_extension, replace_root_path, replace_extension, hash_text, sanitize_text, has_excessive_repetition
-from tempfile import NamedTemporaryFile
-from os import remove
-
 
 # Azure Functions
 app = func.FunctionApp()
@@ -67,8 +74,11 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
     """
     First, raw documents are sanitized to remove any sensitive information.
     """
+
     async def _upload(local_file: IO, remote_path: str) -> None:
-        remote_path = unidecode(replace_root_path(remote_path, SANITIZE_FOLDER), replace_str="")  # Decode possible non ASCII characters
+        remote_path = unidecode(
+            replace_root_path(remote_path, SANITIZE_FOLDER), replace_str=""
+        )  # Decode possible non ASCII characters
         out_client = await _use_blob_client(remote_path)
         await out_client.upload_blob(
             data=local_file,
@@ -89,7 +99,16 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
             await downloader.readinto(in_local_path)
             in_local_path.seek(0)  # Reset file pointer
 
-            if detect_extension(in_remote_path) in {".pdf", ".xps", ".epub", ".mobi", ".fb2", ".cbz", ".svg", ".txt"}:  # Sanitize with PyMuPDF
+            if detect_extension(in_remote_path) in {
+                ".pdf",
+                ".xps",
+                ".epub",
+                ".mobi",
+                ".fb2",
+                ".cbz",
+                ".svg",
+                ".txt",
+            }:  # Sanitize with PyMuPDF
                 logger.info(f"Sanitizing ({in_remote_path})")
                 doc_client = CONFIG.document_intelligence.instance()
                 # Open
@@ -103,16 +122,24 @@ async def raw_to_sanitize(input: BlobClientTrigger) -> None:
                     reset_fields=False,  # Keep form fields (they are extracted later)
                 )
 
-                for pages_numbers, i, chuncks_count in doc_client.chunck(in_pdf.page_count):  # Iterate over chuncks
+                for pages_numbers, i, chuncks_count in doc_client.chunck(
+                    in_pdf.page_count
+                ):  # Iterate over chuncks
                     out_remote_path = replace_extension(in_remote_path, f"-{i}.pdf")
-                    out_local_path = NamedTemporaryFile(delete=False)  # Temp file for destination
+                    out_local_path = NamedTemporaryFile(
+                        delete=False
+                    )  # Temp file for destination
                     out_local_path.close()  # Close to allow pymupdf to open it later
-                    logger.info(f"Saving PDF file {i + 1}/{chuncks_count} ({out_remote_path})")
+                    logger.info(
+                        f"Saving PDF file {i + 1}/{chuncks_count} ({out_remote_path})"
+                    )
 
                     # Create new PDF and insert selected pages
                     out_pdf = pymupdf.Document()
                     for pages_number in pages_numbers:
-                        out_pdf.insert_pdf(in_pdf, from_page=pages_number, to_page=pages_number)
+                        out_pdf.insert_pdf(
+                            in_pdf, from_page=pages_number, to_page=pages_number
+                        )
 
                     # Save and optimize
                     out_pdf.save(
@@ -161,7 +188,9 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
     ) as blob_client:
         in_remote_path = blob_client.blob_name
         blob_properties: BlobProperties = await blob_client.get_blob_properties()
-        blob_md5 = b64encode(blob_properties.content_settings.content_md5).hex()  # See: https://github.com/Azure/azure-sdk-for-python/issues/13104#issuecomment-678033167
+        blob_md5 = b64encode(
+            blob_properties.content_settings.content_md5
+        ).hex()  # See: https://github.com/Azure/azure-sdk-for-python/issues/13104#issuecomment-678033167
         logger.info(f"Processing raw blob ({in_remote_path})")
 
         with NamedTemporaryFile() as in_local_path:  # Temp file for source
@@ -171,8 +200,12 @@ async def sanitize_to_extract(input: BlobClientTrigger) -> None:
             in_local_path.seek(0)  # Reset file pointer
             doc_client = CONFIG.document_intelligence.instance()
 
-            if detect_extension(in_remote_path) in doc_client.compatible_formats():  # Analyze document
-                logger.info(f"Extracting content with Document Intelligence ({in_remote_path})")
+            if (
+                detect_extension(in_remote_path) in doc_client.compatible_formats()
+            ):  # Analyze document
+                logger.info(
+                    f"Extracting content with Document Intelligence ({in_remote_path})"
+                )
                 content, title, langs = await doc_client.analyze(
                     document=in_local_path.file,
                     file_name=in_remote_path,
@@ -230,7 +263,9 @@ async def extract_to_chunck(input: BlobClientTrigger) -> None:
         logger.info(f"Processing extracted blob ({blob_name})")
         downloader = await blob_client.download_blob()
         # Deserialize
-        extracted_model = ExtractedDocumentModel.model_validate_json(await downloader.readall())
+        extracted_model = ExtractedDocumentModel.model_validate_json(
+            await downloader.readall()
+        )
 
     # Prepare chunks for LLM
     llm_client = CONFIG.llm.selected(
@@ -280,7 +315,9 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         logger.info(f"Processing chuncked blob ({blob_name})")
         downloader = await blob_client.download_blob()
         # Deserialize
-        chuncked_model = ChunkedDocumentModel.model_validate_json(await downloader.readall())
+        chuncked_model = ChunkedDocumentModel.model_validate_json(
+            await downloader.readall()
+        )
 
     # LLM does its magic
     def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[str]]:
@@ -290,12 +327,13 @@ async def chunck_to_synthesis(input: BlobClientTrigger) -> None:
         if len(req) < 10:  # Arbitrary minimum length
             return False, "Response too short", None
         return True, None, req
+
     llm_client = CONFIG.llm.selected(
         is_fast=False,  # We want high quality summaries because they are used to avoid hallucinations in the next steps
     ).instance()
     synthesis_str = await llm_client.generate(
         max_tokens=500,  # 500 tokens ~= 375 words
-        res_object=str,
+        res_type=str,
         validation_callback=_validate,
         prompt=f"""
         Assistant is an expert data analyst with 20 years of experience.
@@ -375,7 +413,9 @@ async def synthesis_to_page(input: BlobClientTrigger) -> None:
         logger.info(f"Processing synthesis blob ({blob_name})")
         downloader = await blob_client.download_blob()
         # Deserialize
-        synthesis_model = SynthetisedDocumentModel.model_validate_json(await downloader.readall())
+        synthesis_model = SynthetisedDocumentModel.model_validate_json(
+            await downloader.readall()
+        )
 
     # Prepare chunks for LLM
     llm_client = CONFIG.llm.selected(
@@ -443,13 +483,19 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
     ).instance()
     facts: list[FactModel] = []
     for _ in range(CONFIG.features.fact_iterations):  # We will generate facts 10 times
-        def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[FactedLlmModel]]:
+
+        def _validate(
+            req: Optional[str],
+        ) -> tuple[bool, Optional[str], Optional[FactedLlmModel]]:
+            if not req:
+                return False, "Empty response", None
             try:
                 return True, None, FactedLlmModel.model_validate_json(req)
             except ValidationError as e:
                 return False, str(e), None
+
         facted_llm_model = await llm_client.generate(
-            res_object=FactedLlmModel,
+            res_type=FactedLlmModel,
             temperature=1,  # We want creative answers
             validate_json=True,
             validation_callback=_validate,
@@ -512,9 +558,7 @@ async def page_to_fact(input: BlobClientTrigger) -> None:
     )
 
     # Store
-    out_path = replace_root_path(
-        replace_extension(blob_name, ".json"), FACT_FOLDER
-    )
+    out_path = replace_root_path(replace_extension(blob_name, ".json"), FACT_FOLDER)
     out_client = await _use_blob_client(out_path)
     try:
         await out_client.upload_blob(data=facted_document_model.model_dump_json())
@@ -538,10 +582,13 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         logger.info(f"Processing fact blob ({blob_name})")
         downloader = await blob_client.download_blob()
         # Deserialize
-        facted_model = FactedDocumentModel.model_validate_json(await downloader.readall())
+        facted_model = FactedDocumentModel.model_validate_json(
+            await downloader.readall()
+        )
 
     # Score facts
     initial_fact_count = len(facted_model.facts)
+
     def _validate(req: Optional[str]) -> tuple[bool, Optional[str], Optional[float]]:
         if not req:
             return False, "Empty response", None
@@ -553,6 +600,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
             if group:
                 return True, None, float(group.group())
             return False, "Score not detected", None
+
     llm_client = CONFIG.llm.selected(
         is_fast=False,  # We want high quality to avoid using human validation which is even more costly and slower
     ).instance()
@@ -560,7 +608,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
         *[
             llm_client.generate(
                 max_tokens=10,  # We only need a float score
-                res_object=float,
+                res_type=float,
                 validation_callback=_validate,
                 prompt=f"""
                 Assistant is an expert data analyst with 20 years of experience.
@@ -617,7 +665,7 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
                 Question: {fact.question}
                 Answer: {fact.answer}
                 Context: {fact.context}
-                """,   # TODO: Add at least 5 examples for different contexts
+                """,  # TODO: Add at least 5 examples for different contexts
             )
             for fact in facted_model.facts
         ]
@@ -626,18 +674,20 @@ async def fact_to_critic(input: BlobClientTrigger) -> None:
     # Filter facts
     kept_facts = []
     for i, fact_score in enumerate(fact_scores):
-        if fact_score >= CONFIG.features.fact_score_threshold:  # Discard low quality facts
+        if (
+            fact_score >= CONFIG.features.fact_score_threshold
+        ):  # Discard low quality facts
             kept_facts.append(facted_model.facts[i])
     facted_model.facts = kept_facts
     if not facted_model.facts:
         logger.info(f"No facts left, skipping")
         return
-    logger.info(f"Filtered to {len(facted_model.facts)}/{initial_fact_count} facts ({blob_name})")
+    logger.info(
+        f"Filtered to {len(facted_model.facts)}/{initial_fact_count} facts ({blob_name})"
+    )
 
     # Store
-    out_path = replace_root_path(
-        replace_extension(blob_name, ".json"), CRITIC_FOLDER
-    )
+    out_path = replace_root_path(replace_extension(blob_name, ".json"), CRITIC_FOLDER)
     out_client = await _use_blob_client(out_path)
     try:
         await out_client.upload_blob(data=facted_model.model_dump_json())
@@ -661,7 +711,9 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
         logger.info(f"Processing fact blob ({blob_name})")
         downloader = await blob_client.download_blob()
         # Deserialize
-        facted_model = FactedDocumentModel.model_validate_json(await downloader.readall())
+        facted_model = FactedDocumentModel.model_validate_json(
+            await downloader.readall()
+        )
 
     # Build indexed model
     indexed_models = [
@@ -670,7 +722,9 @@ async def critic_to_index(input: BlobClientTrigger) -> None:
             context=fact.context,
             document_synthesis=facted_model.synthesis,
             file_path=facted_model.file_path,
-            id=hash_text(f"{facted_model.file_md5}-{facted_model.chunk_number + facted_model.page_number + i}"),  # Reproducible ID over the same raw document
+            id=hash_text(
+                f"{facted_model.file_md5}-{facted_model.chunk_number + facted_model.page_number + i}"
+            ),  # Reproducible ID over the same raw document
             question=fact.question,
         )
         for i, fact in enumerate(facted_model.facts)

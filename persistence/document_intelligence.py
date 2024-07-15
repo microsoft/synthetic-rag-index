@@ -1,19 +1,21 @@
-from azure.ai.documentintelligence.aio import DocumentIntelligenceClient
-from azure.core.credentials import AzureKeyCredential
-from helpers.config_models.document_intelligence import DocumentIntelligenceModel
-from helpers.file import detect_extension
-from helpers.http import azure_transport
-from helpers.logging import logger
-from persistence.ianalyze import IAnalyze
+import html
+import math
 from typing import IO, Generator, Optional
+
+from azure.ai.documentintelligence.aio import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import (
     AnalyzeResult,
     ContentFormat,
     DocumentAnalysisFeature,
     ParagraphRole,
 )
-import math
-import html
+from azure.core.credentials import AzureKeyCredential
+
+from helpers.config_models.document_intelligence import DocumentIntelligenceModel
+from helpers.file import detect_extension
+from helpers.http import azure_transport
+from helpers.logging import logger
+from persistence.ianalyze import IAnalyze
 
 
 class DocumentIntelligenceAnalyze(IAnalyze):
@@ -32,7 +34,16 @@ class DocumentIntelligenceAnalyze(IAnalyze):
 
         # Detect features
         features: list[DocumentAnalysisFeature] = []
-        if detect_extension(file_name) in [".pdf", ".jpeg", ".jpg", ".png", ".bmp", ".tiff", ".heif", ".heic"]:
+        if detect_extension(file_name) in [
+            ".pdf",
+            ".jpeg",
+            ".jpg",
+            ".png",
+            ".bmp",
+            ".tiff",
+            ".heif",
+            ".heic",
+        ]:
             features.append(DocumentAnalysisFeature.BARCODES)
             features.append(DocumentAnalysisFeature.FORMULAS)
             features.append(DocumentAnalysisFeature.LANGUAGES)
@@ -65,22 +76,40 @@ class DocumentIntelligenceAnalyze(IAnalyze):
             )
             content = html.unescape(res.content)
             title = html.unescape(title_paragraph.content) if title_paragraph else None
-            langs = {lang.locale for lang in res.languages or [] if lang.confidence >= self._config.extract_lang_threshold}
+            langs = {
+                lang.locale
+                for lang in res.languages or []
+                if lang.confidence >= self._config.extract_lang_threshold
+            }
 
         # Return title, content and langs
         return content, title, langs
 
-    def chunck(self, pages_count: int) -> Generator[tuple[list[int], int, int], None, None]:
+    def chunck(
+        self, pages_count: int
+    ) -> Generator[tuple[list[int], int, int], None, None]:
         first_pages_count = 2
         last_pages_count = 2
-        chuncks_count = math.ceil(pages_count / (self._config.pdf_pages_max - first_pages_count - last_pages_count))  # Limit pages because this is the hard limit in Document Intelligence
+        chuncks_count = math.ceil(
+            pages_count
+            / (self._config.pdf_pages_max - first_pages_count - last_pages_count)
+        )  # Limit pages because this is the hard limit in Document Intelligence
         for i in range(chuncks_count):  # Iterate over desired chunks
             pages_numbers = []
-            pages_numbers += list(range(0, first_pages_count))  # First pages are always kept
-            content_from = max(i * self._config.pdf_pages_max - first_pages_count, first_pages_count)
-            content_to = min((i + 1) * self._config.pdf_pages_max, pages_count) - last_pages_count
+            pages_numbers += list(
+                range(0, first_pages_count)
+            )  # First pages are always kept
+            content_from = max(
+                i * self._config.pdf_pages_max - first_pages_count, first_pages_count
+            )
+            content_to = (
+                min((i + 1) * self._config.pdf_pages_max, pages_count)
+                - last_pages_count
+            )
             pages_numbers += list(range(content_from, content_to))  # Add middle pages
-            pages_numbers += list(range(pages_count - last_pages_count, pages_count))  # Last pages are always kept
+            pages_numbers += list(
+                range(pages_count - last_pages_count, pages_count)
+            )  # Last pages are always kept
             # Yield pages numbers, current file index and total files count
             yield pages_numbers, i, chuncks_count
 

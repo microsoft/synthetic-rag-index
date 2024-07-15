@@ -1,7 +1,7 @@
-from aiohttp import ClientSession, DummyCookieJar
-from azure.core.pipeline.transport._aiohttp import AioHttpTransport
 from typing import Optional
 
+from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
+from azure.core.pipeline.transport._aiohttp import AioHttpTransport
 
 _cookie_jar: Optional[DummyCookieJar] = None
 _session: Optional[ClientSession] = None
@@ -19,9 +19,15 @@ async def aiohttp_session() -> ClientSession:
     global _session
     if not _session:
         _session = ClientSession(
+            # Same config as default in the SDK
             auto_decompress=False,
             cookie_jar=await _aiohttp_cookie_jar(),
             trust_env=True,
+            # Reliability
+            timeout=ClientTimeout(
+                connect=5,
+                total=60,
+            ),
         )
     return _session
 
@@ -30,7 +36,7 @@ async def azure_transport() -> AioHttpTransport:
     global _transport
     if not _transport:
         _transport = AioHttpTransport(
-            session_owner=False,
+            session_owner=False,  # Restrict the SDK to close the client after usage
             session=await aiohttp_session(),
         )
     return _transport
