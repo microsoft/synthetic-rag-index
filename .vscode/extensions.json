@@ -1,0 +1,22 @@
+{
+  "recommendations": [
+    "bierner.markdown-mermaid",
+    "bradlc.vscode-tailwindcss",
+    "DavidAnson.vscode-markdownlint",
+    "EditorConfig.EditorConfig",
+    "github.vscode-github-actions",
+    "mechatroner.rainbow-csv",
+    "mikestead.dotenv",
+    "ms-azuretools.vscode-azurefunctions",
+    "ms-python.black-formatter",
+    "ms-python.debugpy",
+    "ms-python.isort",
+    "ms-python.pylint",
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-vscode.azurecli",
+    "ms-vscode.makefile-tools",
+    "redhat.vscode-yaml",
+    "visualstudioexptteam.vscodeintellicode"
+  ]
+}
