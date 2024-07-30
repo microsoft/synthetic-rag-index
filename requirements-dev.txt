@@ -995,9 +995,9 @@ pydantic-core==2.18.2 \
     --hash=sha256:f93a8a2e3938ff656a7c1bc57193b1319960ac015b6e87d76c76bf14fe0244b4 \
     --hash=sha256:fb2bd7be70c0fe4dfd32c951bc813d9fe6ebcbfdd15a07527796c8204bd36242
     # via pydantic
-pydantic-settings==2.2.1 \
-    --hash=sha256:00b9f6a5e95553590434c0fa01ead0b216c3e10bc54ae02e37f359948643c5ed \
-    --hash=sha256:0235391d26db4d2190cb9b31051c4b46882d28a51533f97440867f012d4da091
+pydantic-settings==2.4.0 \
+    --hash=sha256:bb6849dc067f1687574c12a639e231f3a6feeed0a12d710c1382045c5db1c315 \
+    --hash=sha256:ed81c3a0f46392b4d7c0a565c05884e6e54b3456e6f0fe4d8814981172dc9a88
     # via synthetic-rag-index (pyproject.toml)
 pygments==2.18.0 \
     --hash=sha256:786ff802f32e91311bff3889f6e9a86e81505fe99f2735bb6d60ae0c5004f199 \
