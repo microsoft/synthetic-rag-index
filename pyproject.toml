@@ -6,7 +6,7 @@ name = "synthetic-rag-index"
 readme = "README.md"
 requires-python = "==3.11"
 dependencies = [
-  "aiohttp==3.9.5",  # Async HTTP client for Azure
+  "aiohttp==3.10.2",  # Async HTTP client for Azure
   "azure-ai-documentintelligence==1.0.0b3",  # Azure AI Document Intelligence
   "azure-functions==1.19.0",  # Azure Functions
   "azure-identity==1.16.0",  # Azure Identity library
