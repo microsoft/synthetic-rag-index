@@ -604,9 +604,9 @@ oauthlib==3.2.2 \
     --hash=sha256:8139f29aac13e25d502680e9e19963e83f16838d48a0d71c287fe40e7067fbca \
     --hash=sha256:9859c40929662bec5d64f34d01c99e093149682a3f38915dc0655d5a633dd918
     # via requests-oauthlib
-openai==1.30.3 \
-    --hash=sha256:8e1bcdca2b96fe3636ab522fa153d88efde1b702d12ec32f1c73e9553ff93f45 \
-    --hash=sha256:f88119c8a848998be533c71ab8aa832446fa72b7ddbc70917c3f5886dc132051
+openai==1.41.0 \
+    --hash=sha256:26b81f39b49dce92ff5d30c373625ddb212c2f1050e1574e456d18423730cdd0 \
+    --hash=sha256:3b6cca4571667f3e0800442ef8f2bfa6a6f3301c51776bc7626159a4d81c242c
     # via synthetic-rag-index (pyproject.toml)
 opentelemetry-api==1.25.0 \
     --hash=sha256:757fa1aa020a0f8fa139f8959e53dec2051cc26b832e76fa839a6d76ecefd737 \
