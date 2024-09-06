@@ -10,7 +10,7 @@ dependencies = [
   "azure-ai-documentintelligence==1.0.0b3",  # Azure AI Document Intelligence
   "azure-functions==1.19.0",  # Azure Functions
   "azure-identity==1.16.0",  # Azure Identity library
-  "azure-monitor-opentelemetry==1.4.2",  # Azure Monitor OpenTelemetry
+  "azure-monitor-opentelemetry==1.6.2",  # Azure Monitor OpenTelemetry
   "azure-search-documents==11.6.0b3",  # Azure Search Documents
   "azurefunctions-extensions-bindings-blob==1.0.0b1",  # Azure Functions Extensions Bindings Blob
   "nltk==3.8.1",  # NLP toolkit
