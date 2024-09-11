@@ -864,9 +864,9 @@ pydantic-core==2.18.2 \
     --hash=sha256:f93a8a2e3938ff656a7c1bc57193b1319960ac015b6e87d76c76bf14fe0244b4 \
     --hash=sha256:fb2bd7be70c0fe4dfd32c951bc813d9fe6ebcbfdd15a07527796c8204bd36242
     # via pydantic
-pydantic-settings==2.2.1 \
-    --hash=sha256:00b9f6a5e95553590434c0fa01ead0b216c3e10bc54ae02e37f359948643c5ed \
-    --hash=sha256:0235391d26db4d2190cb9b31051c4b46882d28a51533f97440867f012d4da091
+pydantic-settings==2.5.2 \
+    --hash=sha256:2c912e55fd5794a59bf8c832b9de832dcfdf4778d79ff79b708744eed499a907 \
+    --hash=sha256:f90b139682bee4d2065273d5185d71d37ea46cfe57e1b5ae184fc6a0b2484ca0
     # via synthetic-rag-index (pyproject.toml)
 pyjwt[crypto]==2.8.0 \
     --hash=sha256:57e28d156e3d5c10088e0c68abb90bfac3df82b40a71bd0daa20c65ccd5c23de \
