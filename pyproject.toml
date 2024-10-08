@@ -14,7 +14,7 @@ dependencies = [
   "azure-search-documents==11.6.0b3",  # Azure Search Documents
   "azurefunctions-extensions-bindings-blob==1.0.0b1",  # Azure Functions Extensions Bindings Blob
   "nltk==3.8.1",  # NLP toolkit
-  "openai==1.30.3",  # OpenAI client
+  "openai==1.51.2",  # OpenAI client
   "opentelemetry-instrumentation-aiohttp-client==0.46b0",  # OpenTelemetry instrumentation for aiohttp client
   "opentelemetry-instrumentation-httpx==0.46b0",  # OpenTelemetry instrumentation for HTTPX
   "opentelemetry-instrumentation-openai==0.21.4",  # OpenTelemetry instrumentation for OpenAI
