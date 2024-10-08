@@ -144,9 +144,9 @@ azure-monitor-opentelemetry-exporter==1.0.0b27 \
     --hash=sha256:92f222e11415c6606588be0166b02ba4970159c6bf016160a2023b3713db9f31 \
     --hash=sha256:ee5eb0bb37c29da800cc479084f42181a98d7ad192a27a9b2fdd9cb9957320ad
     # via azure-monitor-opentelemetry
-azure-search-documents==11.6.0b3 \
-    --hash=sha256:3730ac3e22614e594c2dd029114f6ad0f5748ce04c9964752bfa22595ab1f069 \
-    --hash=sha256:b8073274cc9e1300707e218d6cdcc5fe0787c0a764da0f0e2bfb94f437886e02
+azure-search-documents==11.6.0b6 \
+    --hash=sha256:323dce21b584becc72fe8bc22db015fad1db7b62305a27f63609cfa76bfbd340 \
+    --hash=sha256:8e64777f2b98d08ae7f8e64a0312e99a2e904e8b8709aea42dc5f5017c1856fb
     # via synthetic-rag-index (pyproject.toml)
 azure-storage-blob==12.19.1 \
     --hash=sha256:13e16ba42fc54ac2c7e8f976062173a5c82b9ec0594728e134aac372965a11b0 \
