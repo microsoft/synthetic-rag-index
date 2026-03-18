@@ -596,9 +596,9 @@ multidict==6.0.5 \
     # via
     #   aiohttp
     #   yarl
-nltk==3.8.1 \
-    --hash=sha256:1834da3d0682cba4f2cede2f9aad6b0fafb6461ba451db0efb6f9c39798d64d3 \
-    --hash=sha256:fd5c9109f976fa86bcadba8f91e47f5e9293bd034474752e92a520f81c93dda5
+nltk==3.9.3 \
+    --hash=sha256:60b3db6e9995b3dd976b1f0fa7dec22069b2677e759c28eb69b62ddd44870522 \
+    --hash=sha256:cb5945d6424a98d694c2b9a0264519fab4363711065a46aa0ae7a2195b92e71f
     # via synthetic-rag-index (pyproject.toml)
 oauthlib==3.2.2 \
     --hash=sha256:8139f29aac13e25d502680e9e19963e83f16838d48a0d71c287fe40e7067fbca \
