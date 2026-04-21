@@ -21,7 +21,7 @@ dependencies = [
   "pydantic-settings==2.2.1",  # Application configuration management with Pydantic
   "pydantic==2.7.1",  # Data serialization and validation
   "pymupdf==1.24.5",  # PDF parsing and rendering library
-  "python-dotenv==1.0.1",  # Load environment variables from .env file
+  "python-dotenv==1.2.2",  # Load environment variables from .env file
   "pyyaml==6.0.1",  # YAML parser and emitter
   "tiktoken==0.7.0",  # Tokenization library for OpenAI models
   "unidecode==1.3.8"  # Unicode text normalization library
