@@ -13,7 +13,7 @@
       "configureZshAsDefaultShell": true
     },
     "ghcr.io/meaningful-ooo/devcontainer-features/homebrew:2": {},
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:3": {}
   },
   "onCreateCommand": "cd /workspaces/synthetic-rag-index && python3 -m venv .venv",
   "updateContentCommand": "cd /workspaces/synthetic-rag-index && . .venv/bin/activate && make brew upgrade install",
